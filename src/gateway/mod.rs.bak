@@ -1,0 +1,469 @@
+//! API Gateway — Walkie Talkie v4 Platform Layer
+//!
+//! HTTP API for tenant/agent management and message routing.
+
+use crate::identity::AgentIdentity;
+use crate::ratelimit::RateLimiter;
+use crate::registry::{AgentRegistry, RegistryError};
+use crate::tenant::{TenantConfig};
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
+use axum::routing::{delete, get, post};
+use axum::{Json, Router};
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+
+// ─── App State ──────────────────────────────────────────────────
+
+#[derive(Clone)]
+pub struct AppState {
+    pub registry: Arc<AgentRegistry>,
+    pub rate_limiter: Arc<RateLimiter>,
+}
+
+// ─── Request / Response Types ───────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct CreateTenantRequest {
+    pub tenant_id: String,
+    pub name: String,
+    pub config: Option<TenantConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SendMessageRequest {
+    pub from_agent: String,
+    pub to_agent: String,
+    pub tenant_id: String,
+    pub protocol: String,
+    pub payload: serde_json::Value,
+}
+
+fn ok_json(data: serde_json::Value) -> (StatusCode, Json<serde_json::Value>) {
+    (StatusCode::OK, Json(serde_json::json!({ "ok": true, "data": data })))
+}
+
+fn created_json(data: serde_json::Value) -> (StatusCode, Json<serde_json::Value>) {
+    (StatusCode::CREATED, Json(serde_json::json!({ "ok": true, "data": data })))
+}
+
+fn err_json(status: StatusCode, msg: &str) -> (StatusCode, Json<serde_json::Value>) {
+    (status, Json(serde_json::json!({ "ok": false, "error": msg })))
+}
+
+fn registry_error(e: RegistryError) -> (StatusCode, Json<serde_json::Value>) {
+    match &e {
+        RegistryError::TenantNotFound { .. } | RegistryError::AgentNotFound { .. } =>
+            err_json(StatusCode::NOT_FOUND, &e.to_string()),
+        RegistryError::TenantExists { .. } =>
+            err_json(StatusCode::CONFLICT, &e.to_string()),
+        RegistryError::Tenant(_) =>
+            err_json(StatusCode::BAD_REQUEST, &e.to_string()),
+    }
+}
+
+// ─── Handlers ───────────────────────────────────────────────────
+
+async fn health() -> impl IntoResponse {
+    ok_json(serde_json::json!({ "status": "healthy", "version": "0.2.0" }))
+}
+
+async fn create_tenant(
+    State(state): State<AppState>,
+    Json(req): Json<CreateTenantRequest>,
+) -> impl IntoResponse {
+    let result = if let Some(config) = req.config {
+        state.registry.create_tenant_with_config(&req.tenant_id, &req.name, config)
+    } else {
+        state.registry.create_tenant(&req.tenant_id, &req.name)
+    };
+    match result {
+        Ok(t) => created_json(serde_json::json!({
+            "tenant_id": t.tenant_id, "name": t.name,
+            "agent_count": 0, "active": t.active, "created_at": t.created_at,
+        })),
+        Err(e) => registry_error(e),
+    }
+}
+
+async fn list_tenants(State(state): State<AppState>) -> impl IntoResponse {
+    let tenants = state.registry.list_tenants();
+    let data: Vec<serde_json::Value> = tenants.iter().map(|t| {
+        serde_json::json!({
+            "tenant_id": &t.tenant_id, "name": &t.name,
+            "agent_count": t.agent_count, "active": t.active, "created_at": t.created_at,
+        })
+    }).collect();
+    ok_json(serde_json::json!(data))
+}
+
+async fn get_tenant(
+    State(state): State<AppState>,
+    Path(tenant_id): Path<String>,
+) -> impl IntoResponse {
+    match state.registry.get_tenant(&tenant_id) {
+        Some(t) => ok_json(serde_json::json!({
+            "tenant_id": t.tenant_id, "name": t.name,
+            "agent_count": t.agent_count(), "active": t.active, "created_at": t.created_at,
+        })),
+        None => err_json(StatusCode::NOT_FOUND, "Tenant not found"),
+    }
+}
+
+async fn register_agent(
+    State(state): State<AppState>,
+    Path(tenant_id): Path<String>,
+    Json(agent): Json<AgentIdentity>,
+) -> impl IntoResponse {
+    match state.registry.register_agent(&tenant_id, agent) {
+        Ok(a) => created_json(serde_json::json!({
+            "agent_id": a.agent_id, "display_name": a.display_name,
+            "capabilities": a.capabilities,
+        })),
+        Err(e) => registry_error(e),
+    }
+}
+
+async fn list_agents(
+    State(state): State<AppState>,
+    Path(tenant_id): Path<String>,
+) -> impl IntoResponse {
+    match state.registry.list_agents(&tenant_id) {
+        Ok(agents) => {
+            let data: Vec<serde_json::Value> = agents.iter().map(|a| {
+                serde_json::json!({
+                    "agent_id": &a.agent_id, "display_name": &a.display_name,
+                    "capabilities": &a.capabilities,
+                })
+            }).collect();
+            ok_json(serde_json::json!(data))
+        },
+        Err(e) => registry_error(e),
+    }
+}
+
+async fn deregister_agent(
+    State(state): State<AppState>,
+    Path((tenant_id, agent_id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    match state.registry.deregister_agent(&tenant_id, &agent_id) {
+        Ok(a) => ok_json(serde_json::json!({ "agent_id": a.agent_id, "display_name": a.display_name })),
+        Err(e) => registry_error(e),
+    }
+}
+
+async fn send_message(
+    State(state): State<AppState>,
+    Json(req): Json<SendMessageRequest>,
+) -> impl IntoResponse {
+    if let Err(e) = state.registry.find_agent(&req.tenant_id, &req.from_agent) {
+        return registry_error(e);
+    }
+    if !state.rate_limiter.try_acquire(&req.tenant_id, &req.from_agent, 1) {
+        return err_json(StatusCode::TOO_MANY_REQUESTS, "Rate limit exceeded");
+    }
+    ok_json(serde_json::json!({
+        "status": "delivered",
+        "from": req.from_agent, "to": req.to_agent,
+        "protocol": req.protocol,
+        "timestamp": std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default().as_millis(),
+    }))
+}
+
+// ─── Router ─────────────────────────────────────────────────────
+
+pub fn create_router(state: AppState) -> Router {
+    Router::new()
+        .route("/health", get(health))
+        .route("/tenants", post(create_tenant).get(list_tenants))
+        .route("/tenants/{tenant_id}", get(get_tenant))
+        .route("/tenants/{tenant_id}/agents", post(register_agent).get(list_agents))
+        .route("/tenants/{tenant_id}/agents/{agent_id}", delete(deregister_agent))
+        .route("/messages", post(send_message))
+        .with_state(state)
+}
+
+// ─── Tests ──────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::identity::IdentityBuilder;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    fn make_agent(name: &str, caps: &[&str]) -> AgentIdentity {
+        let seed = { let mut b = name.as_bytes().to_vec(); b.resize(32, 0); b };
+        let sk = ed25519_dalek::SigningKey::from_bytes(&seed.try_into().unwrap());
+        IdentityBuilder::new(name).capabilities(caps).build_with_key(&sk).unwrap()
+    }
+
+    fn json_body<T: Serialize>(data: &T) -> Body {
+        Body::from(serde_json::to_vec(data).unwrap())
+    }
+
+    fn test_app() -> Router {
+        create_router(AppState {
+            registry: Arc::new(AgentRegistry::new()),
+            rate_limiter: Arc::new(RateLimiter::new(5, 10)),
+        })
+    }
+
+    async fn body_json(resp: axum::http::Response<Body>) -> serde_json::Value {
+        let bytes = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_health() {
+        let app = test_app();
+        let resp = app.oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let json = body_json(resp).await;
+        assert_eq!(json["ok"], true);
+        assert_eq!(json["data"]["status"], "healthy");
+    }
+
+    #[tokio::test]
+    async fn test_create_tenant() {
+        let app = test_app();
+        let resp = app.clone().oneshot(
+            Request::builder().method("POST").uri("/tenants")
+                .header("content-type", "application/json")
+                .body(json_body(&CreateTenantRequest { tenant_id: "org-1".into(), name: "Test Corp".into(), config: None })).unwrap()
+        ).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let json = body_json(resp).await;
+        assert_eq!(json["data"]["tenant_id"], "org-1");
+    }
+
+    #[tokio::test]
+    async fn test_duplicate_tenant() {
+        let app = test_app();
+        let body = json_body(&CreateTenantRequest { tenant_id: "dup".into(), name: "D".into(), config: None });
+        let req = || Request::builder().method("POST").uri("/tenants").header("content-type", "application/json").body(json_body(&CreateTenantRequest { tenant_id: "dup".into(), name: "D".into(), config: None })).unwrap();
+        assert_eq!(app.clone().oneshot(req()).await.unwrap().status(), StatusCode::CREATED);
+        assert_eq!(app.clone().oneshot(req()).await.unwrap().status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn test_list_tenants() {
+        let app = test_app();
+        for id in &["org-1", "org-2"] {
+            let _ = app.clone().oneshot(
+                Request::builder().method("POST").uri("/tenants")
+                    .header("content-type", "application/json")
+                    .body(json_body(&CreateTenantRequest { tenant_id: id.to_string(), name: "T".into(), config: None })).unwrap()
+            ).await.unwrap();
+        }
+        let resp = app.clone().oneshot(Request::builder().uri("/tenants").body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let json = body_json(resp).await;
+        assert_eq!(json["data"].as_array().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_get_tenant() {
+        let app = test_app();
+        let _ = app.clone().oneshot(
+            Request::builder().method("POST").uri("/tenants").header("content-type", "application/json")
+                .body(json_body(&CreateTenantRequest { tenant_id: "org-1".into(), name: "Acme".into(), config: None })).unwrap()
+        ).await.unwrap();
+        let resp = app.clone().oneshot(Request::builder().uri("/tenants/org-1").body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let json = body_json(resp).await;
+        assert_eq!(json["data"]["name"], "Acme");
+    }
+
+    #[tokio::test]
+    async fn test_get_tenant_not_found() {
+        let app = test_app();
+        let resp = app.oneshot(Request::builder().uri("/tenants/nope").body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_register_agent() {
+        let app = test_app();
+        let _ = app.clone().oneshot(
+            Request::builder().method("POST").uri("/tenants").header("content-type", "application/json")
+                .body(json_body(&CreateTenantRequest { tenant_id: "org-1".into(), name: "T".into(), config: None })).unwrap()
+        ).await.unwrap();
+        let agent = make_agent("Alice", &["crypto"]);
+        let resp = app.clone().oneshot(
+            Request::builder().method("POST").uri("/tenants/org-1/agents").header("content-type", "application/json")
+                .body(json_body(&agent)).unwrap()
+        ).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let json = body_json(resp).await;
+        assert_eq!(json["data"]["display_name"], "Alice");
+    }
+
+    #[tokio::test]
+    async fn test_register_agent_nonexistent_tenant() {
+        let app = test_app();
+        let resp = app.oneshot(
+            Request::builder().method("POST").uri("/tenants/nope/agents").header("content-type", "application/json")
+                .body(json_body(&make_agent("A", &[]))).unwrap()
+        ).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_register_agent_max_limit() {
+        let app = test_app();
+        let _ = app.clone().oneshot(
+            Request::builder().method("POST").uri("/tenants").header("content-type", "application/json")
+                .body(json_body(&CreateTenantRequest {
+                    tenant_id: "strict".into(), name: "S".into(),
+                    config: Some(TenantConfig { max_agents: 1, ..Default::default() }),
+                })).unwrap()
+        ).await.unwrap();
+        let a_resp = app.clone().oneshot(
+            Request::builder().method("POST").uri("/tenants/strict/agents").header("content-type", "application/json")
+                .body(json_body(&make_agent("A", &[]))).unwrap()
+        ).await.unwrap();
+        assert_eq!(a_resp.status(), StatusCode::CREATED);
+        let b_resp = app.clone().oneshot(
+            Request::builder().method("POST").uri("/tenants/strict/agents").header("content-type", "application/json")
+                .body(json_body(&make_agent("B", &[]))).unwrap()
+        ).await.unwrap();
+        assert_eq!(b_resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_list_agents() {
+        let app = test_app();
+        let _ = app.clone().oneshot(
+            Request::builder().method("POST").uri("/tenants").header("content-type", "application/json")
+                .body(json_body(&CreateTenantRequest { tenant_id: "org-1".into(), name: "T".into(), config: None })).unwrap()
+        ).await.unwrap();
+        let _ = app.clone().oneshot(
+            Request::builder().method("POST").uri("/tenants/org-1/agents").header("content-type", "application/json")
+                .body(json_body(&make_agent("Alice", &["crypto"]))).unwrap()
+        ).await.unwrap();
+        let resp = app.clone().oneshot(Request::builder().uri("/tenants/org-1/agents").body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let json = body_json(resp).await;
+        assert_eq!(json["data"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_deregister_agent() {
+        let app = test_app();
+        let _ = app.clone().oneshot(
+            Request::builder().method("POST").uri("/tenants").header("content-type", "application/json")
+                .body(json_body(&CreateTenantRequest { tenant_id: "org-1".into(), name: "T".into(), config: None })).unwrap()
+        ).await.unwrap();
+        let agent = make_agent("Alice", &[]);
+        let aid = agent.agent_id.clone();
+        let _ = app.clone().oneshot(
+            Request::builder().method("POST").uri("/tenants/org-1/agents").header("content-type", "application/json")
+                .body(json_body(&agent)).unwrap()
+        ).await.unwrap();
+        let encoded = urlencoding::encode(&aid);
+        let resp = app.clone().oneshot(
+            Request::builder().method("DELETE")
+                .uri(&format!("/tenants/org-1/agents/{}", encoded))
+                .body(Body::empty()).unwrap()
+        ).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_deregister_nonexistent_agent() {
+        let app = test_app();
+        let _ = app.clone().oneshot(
+            Request::builder().method("POST").uri("/tenants").header("content-type", "application/json")
+                .body(json_body(&CreateTenantRequest { tenant_id: "org-1".into(), name: "T".into(), config: None })).unwrap()
+        ).await.unwrap();
+        let resp = app.clone().oneshot(
+            Request::builder().method("DELETE")
+                .uri("/tenants/org-1/agents/did:walkie:nope")
+                .body(Body::empty()).unwrap()
+        ).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_send_message() {
+        let app = test_app();
+        let _ = app.clone().oneshot(
+            Request::builder().method("POST").uri("/tenants").header("content-type", "application/json")
+                .body(json_body(&CreateTenantRequest { tenant_id: "org-1".into(), name: "T".into(), config: None })).unwrap()
+        ).await.unwrap();
+        let agent = make_agent("Sender", &["chat"]);
+        let aid = agent.agent_id.clone();
+        let _ = app.clone().oneshot(
+            Request::builder().method("POST").uri("/tenants/org-1/agents").header("content-type", "application/json")
+                .body(json_body(&agent)).unwrap()
+        ).await.unwrap();
+        let msg = SendMessageRequest {
+            from_agent: aid, to_agent: String::new(),
+            tenant_id: "org-1".into(), protocol: "data_exchange".into(),
+            payload: serde_json::json!({"text": "hello"}),
+        };
+        let resp = app.clone().oneshot(
+            Request::builder().method("POST").uri("/messages").header("content-type", "application/json")
+                .body(json_body(&msg)).unwrap()
+        ).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let json = body_json(resp).await;
+        assert_eq!(json["data"]["status"], "delivered");
+    }
+
+    #[tokio::test]
+    async fn test_send_message_nonexistent_agent() {
+        let app = test_app();
+        let msg = SendMessageRequest {
+            from_agent: "did:walkie:nope".into(), to_agent: String::new(),
+            tenant_id: "nope".into(), protocol: "x".into(), payload: serde_json::json!({}),
+        };
+        let resp = app.clone().oneshot(
+            Request::builder().method("POST").uri("/messages").header("content-type", "application/json")
+                .body(json_body(&msg)).unwrap()
+        ).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_rate_limiting() {
+        let app = test_app();
+        let _ = app.clone().oneshot(
+            Request::builder().method("POST").uri("/tenants").header("content-type", "application/json")
+                .body(json_body(&CreateTenantRequest { tenant_id: "org-1".into(), name: "T".into(), config: None })).unwrap()
+        ).await.unwrap();
+        let agent = make_agent("Sender", &[]);
+        let aid = agent.agent_id.clone();
+        let _ = app.clone().oneshot(
+            Request::builder().method("POST").uri("/tenants/org-1/agents").header("content-type", "application/json")
+                .body(json_body(&agent)).unwrap()
+        ).await.unwrap();
+        // Burst 10 (burst=10)
+        for _ in 0..10 {
+            let msg = SendMessageRequest {
+                from_agent: aid.clone(), to_agent: String::new(),
+                tenant_id: "org-1".into(), protocol: "x".into(), payload: serde_json::json!({}),
+            };
+            let resp = app.clone().oneshot(
+                Request::builder().method("POST").uri("/messages").header("content-type", "application/json")
+                    .body(json_body(&msg)).unwrap()
+            ).await.unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
+        }
+        // 11th should be rate-limited
+        let msg = SendMessageRequest {
+            from_agent: aid.clone(), to_agent: String::new(),
+            tenant_id: "org-1".into(), protocol: "x".into(), payload: serde_json::json!({}),
+        };
+        let resp = app.clone().oneshot(
+            Request::builder().method("POST").uri("/messages").header("content-type", "application/json")
+                .body(json_body(&msg)).unwrap()
+        ).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+}

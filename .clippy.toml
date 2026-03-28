@@ -1,0 +1,8 @@
+# walkie-talkie-core Clippy configuration
+# https://doc.rust-lang.org/nightly/clippy/lint_configuration.html
+
+# ── Lint groups ──
+warn-on-all-wildcard-imports = true
+
+# ── CAPI allowed lints for napi-binding feature ──
+# (napi-rs macro patterns trigger these; suppress only when napi-binding is active)
