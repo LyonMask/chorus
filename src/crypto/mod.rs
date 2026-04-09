@@ -257,4 +257,76 @@ mod tests {
         // Try to decrypt from unknown peer
         assert!(alice.decrypt_from("eve", b"garbage").is_err());
     }
+
+    // ── Boundary tests ──
+
+    #[test]
+    fn test_encrypt_empty_plaintext() {
+        let mut session = make_test_session();
+        let encrypted = session.encrypt(b"").unwrap();
+        assert!(encrypted.len() > NONCE_SIZE); // nonce + poly1305 tag even for empty
+        let decrypted = session.decrypt(&encrypted).unwrap();
+        assert!(decrypted.is_empty());
+    }
+
+    #[test]
+    fn test_decrypt_nonce_only_fails() {
+        let mut session = make_test_session();
+        let data = [0u8; NONCE_SIZE]; // 12 bytes nonce, zero bytes ciphertext
+        assert!(session.decrypt(&data).is_err());
+    }
+
+    #[test]
+    fn test_decrypt_short_tag_fails() {
+        let mut session = make_test_session();
+        // NONCE_SIZE + 15 bytes: one byte short of the 16-byte Poly1305 tag
+        let data = [0u8; NONCE_SIZE + 15];
+        assert!(session.decrypt(&data).is_err());
+    }
+
+    #[test]
+    fn test_decrypt_valid_length_invalid_content_fails() {
+        let mut session = make_test_session();
+        // Valid length (nonce + tag), but random bytes = invalid AEAD
+        let data = [0x42u8; NONCE_SIZE + 16];
+        assert!(session.decrypt(&data).is_err());
+    }
+
+    #[test]
+    fn test_multiple_sequential_encryptions_counter_increments() {
+        let mut session = make_test_session();
+        let enc1 = session.encrypt(b"a").unwrap();
+        let enc2 = session.encrypt(b"b").unwrap();
+        let enc3 = session.encrypt(b"c").unwrap();
+        // All nonces must differ (counter increments)
+        let nonce1 = &enc1[..NONCE_SIZE];
+        let nonce2 = &enc2[..NONCE_SIZE];
+        let nonce3 = &enc3[..NONCE_SIZE];
+        assert_ne!(nonce1, nonce2);
+        assert_ne!(nonce2, nonce3);
+        // All decrypt correctly
+        assert_eq!(session.decrypt(&enc1).unwrap(), b"a");
+        assert_eq!(session.decrypt(&enc2).unwrap(), b"b");
+        assert_eq!(session.decrypt(&enc3).unwrap(), b"c");
+    }
+
+    #[test]
+    fn test_diffie_hellman_wrong_key_lengths() {
+        let result = CryptoLayer::diffie_hellman(&[1u8; 16], &[2u8; 32]);
+        assert!(result.is_err());
+        let result = CryptoLayer::diffie_hellman(&[1u8; 32], &[2u8; 16]);
+        assert!(result.is_err());
+        let result = CryptoLayer::diffie_hellman(&[1u8; 31], &[2u8; 33]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_encrypt_large_payload() {
+        let mut session = make_test_session();
+        let large = vec![0xABu8; 64 * 1024]; // 64 KB
+        let encrypted = session.encrypt(&large).unwrap();
+        let decrypted = session.decrypt(&encrypted).unwrap();
+        assert_eq!(decrypted.len(), 64 * 1024);
+        assert_eq!(decrypted, large);
+    }
 }

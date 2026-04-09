@@ -703,4 +703,71 @@ mod tests {
         let decoded: MessageId = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded.as_str(), "abc_123_def");
     }
+
+    // ── Boundary tests ──
+
+    #[test]
+    fn test_empty_payload_roundtrip() {
+        let agent = make_test_agent("A");
+        let msg = AgentMessage::new(&agent, MessageProtocol::Heartbeat, serde_json::Value::Null);
+        let bytes = msg.to_json_bytes().unwrap();
+        let decoded = AgentMessage::from_json_bytes(&bytes).unwrap();
+        assert!(decoded.payload.is_null());
+    }
+
+    #[test]
+    fn test_deeply_nested_payload_roundtrip() {
+        let agent = make_test_agent("A");
+        let deep = serde_json::json!({"a": {"b": {"c": {"d": {"e": "deep"}}}}});
+        let msg = AgentMessage::new(&agent, MessageProtocol::DataExchange, deep.clone());
+        let bytes = msg.to_json_bytes().unwrap();
+        let decoded = AgentMessage::from_json_bytes(&bytes).unwrap();
+        assert_eq!(decoded.payload, deep);
+    }
+
+    #[test]
+    fn test_large_payload_roundtrip() {
+        let agent = make_test_agent("A");
+        let big_array: Vec<i32> = (0..10_000).collect();
+        let payload = serde_json::json!({"items": big_array, "count": 10000});
+        let msg = AgentMessage::new(&agent, MessageProtocol::DataExchange, payload);
+        let bytes = msg.to_json_bytes().unwrap();
+        let decoded = AgentMessage::from_json_bytes(&bytes).unwrap();
+        assert_eq!(decoded.payload["count"], 10000);
+        assert_eq!(decoded.payload["items"].as_array().unwrap().len(), 10_000);
+    }
+
+    #[test]
+    fn test_truncated_json_fails() {
+        // Valid-looking start but cut off halfway
+        let partial = br#"{"id":"x","from_agent":{"agent_id":"did:walkie:"#;
+        assert!(AgentMessage::from_json_bytes(partial).is_err());
+    }
+
+    #[test]
+    fn test_json_with_wrong_types_fails() {
+        // protocol field should be string enum, not a number
+        let bad = br#"{"id":"x","from_agent":{"agent_id":"","display_name":"","capabilities":[],"public_key":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","owner_id":"","version":"v","created_at":0,"signature":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},"to_agent":"","protocol":999,"payload":null,"priority":{"0":75},"requires_human":false,"timestamp":0}"#;
+        assert!(AgentMessage::from_json_bytes(bad).is_err());
+    }
+
+    #[test]
+    fn test_missing_from_agent_fails() {
+        // from_agent is required but missing
+        let bad = br#"{"id":"x","to_agent":"","protocol":"heartbeat","payload":null,"priority":{"0":75},"requires_human":false,"timestamp":0}"#;
+        assert!(AgentMessage::from_json_bytes(bad).is_err());
+    }
+
+    #[test]
+    fn test_completely_empty_bytes_fails() {
+        assert!(AgentMessage::from_json_bytes(b"").is_err());
+    }
+
+    #[test]
+    fn test_payload_helpers_on_empty_payload() {
+        let agent = make_test_agent("A");
+        let msg = AgentMessage::new(&agent, MessageProtocol::Heartbeat, serde_json::json!({}));
+        assert_eq!(msg.payload_str("missing"), None);
+        assert_eq!(msg.payload_i64("missing"), None);
+    }
 }

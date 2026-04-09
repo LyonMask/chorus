@@ -509,4 +509,77 @@ mod tests {
         assert!(identity.owner_id.is_empty());
         assert!(identity.verify().is_ok());
     }
+
+    // ── Additional boundary tests ──
+
+    #[test]
+    fn test_tampered_version_fails() {
+        let (mut identity, _) = IdentityBuilder::new("Agent")
+            .version("0.1.0")
+            .build()
+            .unwrap();
+        identity.version = "0.99.0-tampered".to_string();
+        assert!(matches!(identity.verify(), Err(IdentityError::InvalidSignature)));
+    }
+
+    #[test]
+    fn test_tampered_created_at_fails() {
+        let (mut identity, _) = IdentityBuilder::new("Agent")
+            .build()
+            .unwrap();
+        identity.created_at = 9999999999999;
+        assert!(matches!(identity.verify(), Err(IdentityError::InvalidSignature)));
+    }
+
+    #[test]
+    fn test_empty_display_name_valid() {
+        let seed = [77u8; 32];
+        let signing_key = SigningKey::from_bytes(&seed);
+        let identity = IdentityBuilder::new("")
+            .build_with_key(&signing_key)
+            .unwrap();
+        assert!(identity.display_name.is_empty());
+        assert!(identity.verify().is_ok());
+    }
+
+    #[test]
+    fn test_did_empty_string() {
+        assert!(pubkey_from_did("").is_none());
+        // "did:walkie:" decodes to Some([]) (empty base64url = empty vec)
+        let result = pubkey_from_did("did:walkie:");
+        assert!(result.is_some());
+        assert!(result.unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_short_pubkey_did() {
+        // 16 bytes instead of 32 — should encode/decode fine but produce wrong DID
+        let short = [0xABu8; 16];
+        let did = did_from_pubkey(&short);
+        assert!(did.starts_with("did:walkie:"));
+        let recovered = pubkey_from_did(&did).unwrap();
+        assert_eq!(recovered.len(), 16);
+    }
+
+    #[test]
+    fn test_empty_capabilities_list() {
+        let seed = [88u8; 32];
+        let signing_key = SigningKey::from_bytes(&seed);
+        let identity = IdentityBuilder::new("Agent")
+            .build_with_key(&signing_key)
+            .unwrap();
+        assert!(identity.capabilities.is_empty());
+        assert!(!identity.has_capability("anything"));
+        assert!(identity.verify().is_ok());
+    }
+
+    #[test]
+    fn test_identity_with_very_long_display_name() {
+        let long_name = "A".repeat(10_000);
+        let (identity, _) = IdentityBuilder::new(&long_name)
+            .build()
+            .unwrap();
+        assert_eq!(identity.display_name.len(), 10_000);
+        assert!(identity.verify().is_ok());
+    }
 }
