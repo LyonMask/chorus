@@ -35,6 +35,22 @@ crossterm = { version = "0.28", optional = true }
 [build-dependencies]
 napi-build = { version = "2", optional = true }
 
+[dev-dependencies]
+tokio-test = "0.4"
+criterion = { version = "0.5", features = ["async_tokio"] }
+
+[[bench]]
+name = "crypto_bench"
+harness = false
+
+[[bench]]
+name = "protocol_bench"
+harness = false
+
+[[bench]]
+name = "multi_node_sim"
+harness = false
+
 [[example]]
 name = "walkie_tui"
 required-features = ["tui"]
@@ -47,9 +63,5 @@ required-features = ["tui"]
 name = "tui_demo"
 required-features = ["tui"]
 
-[dev-dependencies]
-tokio-test = "0.4"
-
 [[example]]
 name = "sdk_openclaw_agent"
-

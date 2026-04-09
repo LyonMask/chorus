@@ -14,6 +14,12 @@ pub struct AgentRegistry {
     inner: Arc<RwLock<HashMap<String, Tenant>>>,
 }
 
+impl Default for AgentRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AgentRegistry {
     pub fn new() -> Self {
         Self { inner: Arc::new(RwLock::new(HashMap::new())) }

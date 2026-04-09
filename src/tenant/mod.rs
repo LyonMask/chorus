@@ -10,6 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 // ─── Tenant Config ──────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct TenantConfig {
     #[serde(default)]
     pub max_agents: usize,
@@ -23,17 +24,6 @@ pub struct TenantConfig {
     pub metadata: HashMap<String, String>,
 }
 
-impl Default for TenantConfig {
-    fn default() -> Self {
-        Self {
-            max_agents: 0,
-            allowed_capabilities: Vec::new(),
-            rate_limit: 0,
-            require_approval: false,
-            metadata: HashMap::new(),
-        }
-    }
-}
 
 // ─── Tenant ─────────────────────────────────────────────────────
 
