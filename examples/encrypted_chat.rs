@@ -202,11 +202,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 println!("📡 [raw] {}: {}", short(&from.to_string()), text);
             }
             P2PEvent::AgentIdentified { peer_id, identity } => {
-                let ts = hms();
+                let _ts = hms();
                 let caps = identity.capabilities.join(", ");
                 println!("[{}] 🪪 {} is {} [{}]", hms(), short(&peer_id.to_string()), identity.display_name, caps);
             }
-            P2PEvent::IdentityVerificationFailed { peer_id, reason } => {
+            P2PEvent::IdentityVerificationFailed { peer_id: _, reason } => {
                 println!("❌ Identity fail: {reason}");
             }
             P2PEvent::StructuredMessage { from, message } => {

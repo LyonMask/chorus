@@ -187,7 +187,7 @@ async fn main() -> anyhow::Result<()> {
 
                 Some("quit") | Some("exit") => {
                     println!("  Shutting down...");
-                    net_shutdown.shutdown();
+                    let _ = net_shutdown.shutdown();
                     break;
                 }
 
@@ -319,7 +319,7 @@ async fn handle_structured_message(
         }
 
         MessageProtocol::StatusReport => {
-            let status = msg.payload_str("status").unwrap_or("?");
+            let _status = msg.payload_str("status").unwrap_or("?");
             let pct = msg.payload_i64("percent").unwrap_or(0);
             let note = msg.payload_str("note").unwrap_or("");
             println!("  [STATUS←] {} — {}% — {}", msg.from_agent.display_name, pct, note);

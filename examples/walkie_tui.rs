@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! 🖥️ walkie_tui.rs — Layer 3 Human Interface (Terminal UI)
 //!
 //! Minimal viable TUI for observing and controlling AI Agent collaboration.
@@ -42,9 +43,10 @@ struct AgentInfo {
     did: String,
     online: bool,
     load: f32,
+    #[allow(dead_code)]
     capabilities: Vec<String>,
     last_seen: Instant,
-    tasks_active: u32,
+    #[allow(dead_code)] tasks_active: u32,
 }
 
 #[derive(Debug, Clone)]

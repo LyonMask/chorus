@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! 🤖 agent_chat.rs — Layer 0-2 Integration POC
 //!
 //! 3 AI Agents collaborate to complete a code review task:
@@ -18,7 +19,7 @@ use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::AsyncBufReadExt;
 
 use walkie_talkie_core::identity::{AgentIdentity, IdentityBuilder};
 use walkie_talkie_core::p2p::{P2PConfig, P2PEvent, P2PNetwork};
@@ -245,8 +246,8 @@ async fn run_demo() -> Result<(), Box<dyn Error>> {
 
     // Clone for task closure
     let all_msgs1 = all_messages.clone();
-    let task_id1 = task_id.clone();
-    let result_received1 = result_received.clone();
+    let _task_id1 = task_id.clone();
+    let _result_received1 = result_received.clone();
 
     // --- Steve sends heartbeat ---
     println!();
@@ -481,7 +482,7 @@ async fn run_interactive(name: &str, peers: &[String]) -> Result<(), Box<dyn Err
                         P2PEvent::PeerDisconnected { peer_id } => {
                             println!("  ❌ Peer disconnected: {}", peer_id);
                         }
-                        P2PEvent::RawMessage { from, data } => {
+                        P2PEvent::RawMessage { from: _, data } => {
                             if let Ok(msg) = AgentMessage::from_json_bytes(&data) {
                                 println!("{}", format_message(&msg));
                             }
@@ -514,7 +515,7 @@ async fn run_interactive(name: &str, peers: &[String]) -> Result<(), Box<dyn Err
                                     println!("Usage: task <agent> <name> [json]");
                                     continue;
                                 }
-                                let mut msg = AgentMessage::task(
+                                let msg = AgentMessage::task(
                                     &agent.identity, parts[1], serde_json::json!({})
                                 );
                                 if parts.len() > 3 {

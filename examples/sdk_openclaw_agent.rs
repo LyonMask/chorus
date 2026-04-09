@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! SDK Integration Example — OpenClaw Agent connecting to Walkie Talkie Platform
 //!
 //! Demonstrates how an AI agent (e.g., an OpenClaw session) registers with
@@ -5,7 +6,6 @@
 //!
 //! Run: cargo run --example sdk_openclaw_agent
 
-use std::time::Duration;
 
 /// Minimal HTTP client for the Walkie Talkie Gateway API.
 /// In production, use reqwest or your HTTP client of choice.
