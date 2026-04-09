@@ -1002,5 +1002,489 @@ mod tests {
         let info = AgentInfo::new("p1", "Alice", "short");
         assert_eq!(info.short_did(), "short");
     }
-}
 
+    // ═══════════════════════════════════════════════════════════════
+    // NEW TESTS — C1 Coverage Expansion
+    // ═══════════════════════════════════════════════════════════════
+
+    // ── ActivityAction::from_message — additional paths ──
+
+    #[test]
+    fn test_activity_action_from_pending_status() {
+        let id = make_test_identity("Hank");
+        let msg = AgentMessage::status(&id, "pending", 0, "queued");
+        let (action, detail) = ActivityAction::from_message(&msg);
+        assert_eq!(action, ActivityAction::TaskAccepted);
+        assert!(detail.contains("pending"));
+    }
+
+    #[test]
+    fn test_activity_action_from_unknown_status() {
+        let id = make_test_identity("Ivy");
+        let msg = AgentMessage::status(&id, "weird_state", 42, "something");
+        let (action, _) = ActivityAction::from_message(&msg);
+        // Unknown status falls through to TaskProgress (default arm)
+        assert_eq!(action, ActivityAction::TaskProgress);
+    }
+
+    #[test]
+    fn test_activity_action_from_status_empty_note() {
+        let id = make_test_identity("Jack");
+        let msg = AgentMessage::status(&id, "in_progress", 75, "");
+        let (_, detail) = ActivityAction::from_message(&msg);
+        // Empty note should not produce " — " suffix
+        assert!(!detail.contains(" — "));
+        assert!(detail.contains("75%"));
+    }
+
+    #[test]
+    fn test_activity_action_from_data_exchange_schema() {
+        let id = make_test_identity("Kate");
+        let msg = AgentMessage::data(&id, "json", json!({"records": 42}));
+        let (action, detail) = ActivityAction::from_message(&msg);
+        // No "text" key → goes to schema path, falls back to "data" for schema name
+        assert_eq!(action, ActivityAction::DataExchanged);
+        assert!(detail.contains("Kate"));
+        assert!(detail.contains("ALL"));
+    }
+
+    #[test]
+    fn test_activity_action_from_task_with_empty_to_agent() {
+        let id = make_test_identity("Leo");
+        let msg = AgentMessage::task(&id, "deploy", json!({}));
+        let (action, detail) = ActivityAction::from_message(&msg);
+        assert_eq!(action, ActivityAction::TaskAssigned);
+        // to_agent is empty → shows "ALL"
+        assert!(detail.contains("ALL"));
+    }
+
+    #[test]
+    fn test_activity_action_from_task_with_target() {
+        let id = make_test_identity("Leo");
+        let msg = AgentMessage::task(&id, "deploy", json!({})).to("agent-bob");
+        let (action, detail) = ActivityAction::from_message(&msg);
+        assert_eq!(action, ActivityAction::TaskAssigned);
+        assert!(detail.contains("agent-bob"));
+        assert!(!detail.contains("ALL"));
+    }
+
+    // ── Comprehensive icon coverage ──
+
+    #[test]
+    fn test_all_activity_action_icons() {
+        assert_eq!(ActivityAction::AgentOffline.icon(), "⚫");
+        assert_eq!(ActivityAction::TaskAccepted.icon(), "📊");
+        assert_eq!(ActivityAction::TaskProgress.icon(), "📊");
+        assert_eq!(ActivityAction::TaskFailed.icon(), "❌");
+        assert_eq!(ActivityAction::TaskBlocked.icon(), "⚠️");
+        assert_eq!(ActivityAction::DataExchanged.icon(), "📦");
+        assert_eq!(ActivityAction::CapabilityQuery.icon(), "🤝");
+        assert_eq!(ActivityAction::Approved.icon(), "✅");
+        assert_eq!(ActivityAction::Rejected.icon(), "❌");
+        assert_eq!(ActivityAction::Dismissed.icon(), "⬜");
+        assert_eq!(ActivityAction::E2EESession.icon(), "🔒");
+        assert_eq!(ActivityAction::IdentityVerified.icon(), "🪪");
+        assert_eq!(ActivityAction::Connected.icon(), "🔗");
+        assert_eq!(ActivityAction::RawMessage.icon(), "📨");
+        assert_eq!(ActivityAction::SystemInfo.icon(), "ℹ️");
+    }
+
+    // ── Comprehensive tag coverage ──
+
+    #[test]
+    fn test_all_activity_action_tags() {
+        assert_eq!(ActivityAction::AgentOffline.tag(), "OFFLINE");
+        assert_eq!(ActivityAction::TaskAccepted.tag(), "ACCEPTED");
+        assert_eq!(ActivityAction::TaskProgress.tag(), "PROGRESS");
+        assert_eq!(ActivityAction::TaskFailed.tag(), "FAILED");
+        assert_eq!(ActivityAction::TaskBlocked.tag(), "BLOCKED");
+        assert_eq!(ActivityAction::DataExchanged.tag(), "DATA");
+        assert_eq!(ActivityAction::TextMessage.tag(), "TEXT");
+        assert_eq!(ActivityAction::CapabilityQuery.tag(), "INTENT");
+        assert_eq!(ActivityAction::AgentOnline.tag(), "ONLINE");
+        assert_eq!(ActivityAction::Approved.tag(), "APPROVED");
+        assert_eq!(ActivityAction::Rejected.tag(), "REJECTED");
+        assert_eq!(ActivityAction::Dismissed.tag(), "DISMISSED");
+        assert_eq!(ActivityAction::E2EESession.tag(), "E2EE");
+        assert_eq!(ActivityAction::IdentityVerified.tag(), "IDENTITY");
+        assert_eq!(ActivityAction::Connected.tag(), "CONNECT");
+        assert_eq!(ActivityAction::RawMessage.tag(), "MSG");
+        assert_eq!(ActivityAction::SystemInfo.tag(), "INFO");
+    }
+
+    // ── AlertStatus equality ──
+
+    #[test]
+    fn test_alert_status_variants() {
+        assert_eq!(AlertStatus::Pending, AlertStatus::Pending);
+        assert_ne!(AlertStatus::Pending, AlertStatus::Approved);
+        assert_ne!(AlertStatus::Approved, AlertStatus::Rejected);
+        assert_ne!(AlertStatus::Rejected, AlertStatus::Dismissed);
+    }
+
+    // ── AgentInfo::new defaults ──
+
+    #[test]
+    fn test_agent_info_new_defaults() {
+        let info = AgentInfo::new("pk1", "Alice", "did:test:123");
+        assert_eq!(info.peer_key, "pk1");
+        assert_eq!(info.display_name, "Alice");
+        assert_eq!(info.did, "did:test:123");
+        assert!(info.online);
+        assert!((info.load - 0.0).abs() < f32::EPSILON);
+        assert!(info.capabilities.is_empty());
+    }
+
+    // ── add_agent idempotent ──
+
+    #[test]
+    fn test_add_agent_idempotent() {
+        let mut app = TuiApp::new();
+        app.add_agent("p1", "Alice", "did:a");
+        app.add_agent("p1", "Bob", "did:b"); // same key, should NOT overwrite
+        assert_eq!(app.agents.len(), 1);
+        assert_eq!(app.agents["p1"].display_name, "Alice"); // kept original
+    }
+
+    // ── set_agent_offline non-existent ──
+
+    #[test]
+    fn test_set_agent_offline_nonexistent() {
+        let mut app = TuiApp::new();
+        app.set_agent_offline("ghost");
+        assert!(app.activities.is_empty()); // no crash, no activity
+    }
+
+    // ── update_agent_from_identity ──
+
+    #[test]
+    fn test_update_agent_from_identity_new() {
+        let mut app = TuiApp::new();
+        let id = make_test_identity("Alice");
+        app.update_agent_from_identity("p1", &id);
+        assert_eq!(app.agents.len(), 1);
+        assert_eq!(app.agents["p1"].display_name, "Alice");
+        assert!(app.agents["p1"].online);
+        assert_eq!(app.agents["p1"].capabilities, vec!["test"]);
+        // Should create an IdentityVerified activity
+        assert!(app.activities.iter().any(|a| a.action == ActivityAction::IdentityVerified));
+    }
+
+    #[test]
+    fn test_update_agent_from_identity_updates_existing() {
+        let mut app = TuiApp::new();
+        app.add_agent("p1", "OldName", "did:old");
+
+        let id = make_test_identity("NewName");
+        app.update_agent_from_identity("p1", &id);
+
+        assert_eq!(app.agents["p1"].display_name, "NewName");
+        assert_eq!(app.agents["p1"].did, id.agent_id);
+        assert_eq!(app.agents["p1"].capabilities, vec!["test"]);
+        assert!(app.agents["p1"].online);
+    }
+
+    #[test]
+    fn test_update_agent_from_identity_sets_online() {
+        let mut app = TuiApp::new();
+        app.add_agent("p1", "Alice", "did:a");
+        app.set_agent_offline("p1");
+        assert!(!app.agents["p1"].online);
+
+        let id = make_test_identity("Alice");
+        app.update_agent_from_identity("p1", &id);
+        assert!(app.agents["p1"].online);
+    }
+
+    // ── process_agent_message — heartbeat load update ──
+
+    #[test]
+    fn test_process_heartbeat_updates_load() {
+        let mut app = TuiApp::new();
+        let id = make_test_identity("Worker");
+        // Register agent keyed by agent_id so the load update can find it
+        app.agents.entry(id.agent_id.clone())
+            .or_insert_with(|| AgentInfo::new(&id.agent_id, &id.display_name, &id.agent_id));
+
+        let msg = AgentMessage::heartbeat(&id, "online", 0.75);
+        app.process_agent_message(&msg);
+
+        let agent = &app.agents[&id.agent_id];
+        assert!(agent.online);
+        assert!((agent.load - 0.75).abs() < 0.01);
+    }
+
+    // ── process_agent_message — DataExchange text via process path ──
+
+    #[test]
+    fn test_process_data_exchange_text() {
+        let mut app = TuiApp::new();
+        let id = make_test_identity("Chatter");
+        let msg = AgentMessage::text(&id, "hello from process path");
+        app.process_agent_message(&msg);
+
+        assert_eq!(app.event_count, 1);
+        assert_eq!(app.activities[0].action, ActivityAction::TextMessage);
+        assert!(app.activities[0].detail.contains("hello from process path"));
+        assert!(!app.activities[0].requires_human);
+    }
+
+    // ── process_agent_message — DataExchange schema via process path ──
+
+    #[test]
+    fn test_process_data_exchange_schema() {
+        let mut app = TuiApp::new();
+        let id = make_test_identity("DataBot");
+        let msg = AgentMessage::data(&id, "json", json!({"rows": 100}));
+        app.process_agent_message(&msg);
+
+        assert_eq!(app.event_count, 1);
+        assert_eq!(app.activities[0].action, ActivityAction::DataExchanged);
+    }
+
+    // ── process_agent_message — requires_human flag propagation ──
+
+    #[test]
+    fn test_process_message_requires_human_flag() {
+        let mut app = TuiApp::new();
+        let id = make_test_identity("Agent");
+        // Create a regular text message then mark requires_human
+        let msg = AgentMessage::text(&id, "urgent").requires_human();
+        app.process_agent_message(&msg);
+
+        assert!(app.activities[0].requires_human);
+    }
+
+    // ── process_agent_message — StatusReport (pending) ──
+
+    #[test]
+    fn test_process_pending_status() {
+        let mut app = TuiApp::new();
+        let id = make_test_identity("Worker");
+        let msg = AgentMessage::status(&id, "pending", 0, "waiting to start");
+        app.process_agent_message(&msg);
+
+        assert_eq!(app.activities[0].action, ActivityAction::TaskAccepted);
+    }
+
+    // ── Key handling — GoToAlerts with pending alerts ──
+
+    #[test]
+    fn test_app_key_goto_alerts_with_pending() {
+        let mut app = TuiApp::new();
+        app.add_alert("A", "r", "s", "");
+        // approve it first to go back to dashboard
+        app.approve_selected_alert();
+        assert_eq!(app.mode, AppMode::Dashboard);
+
+        // Add another alert — stays in AlertDetail since already there
+        // but let's go to dashboard first then trigger GoToAlerts
+        app.mode = AppMode::Dashboard;
+        app.add_alert("B", "r2", "s2", "");
+        // add_alert auto-switches to AlertDetail, so test GoToAlerts from dashboard
+        app.mode = AppMode::Dashboard;
+        app.add_alert("C", "r3", "s3", ""); // auto-switches again
+
+        // Now go to dashboard manually and test GoToAlerts
+        app.mode = AppMode::Dashboard;
+        app.handle_key(Key::GoToAlerts);
+        assert_eq!(app.mode, AppMode::AlertDetail);
+    }
+
+    // ── Key handling — Approve/Reject/Dismiss in Dashboard mode (no-op) ──
+
+    #[test]
+    fn test_app_key_approve_in_dashboard_noop() {
+        let mut app = TuiApp::new();
+        app.add_alert("A", "r", "s", "");
+        // Manually switch to dashboard (add_alert auto-switches to AlertDetail)
+        app.mode = AppMode::Dashboard;
+        app.handle_key(Key::Approve);
+        // Should still be pending since we were in Dashboard mode
+        assert_eq!(app.alerts[0].status, AlertStatus::Pending);
+        assert_eq!(app.pending_approvals, 1);
+    }
+
+    #[test]
+    fn test_app_key_reject_in_dashboard_noop() {
+        let mut app = TuiApp::new();
+        app.add_alert("A", "r", "s", "");
+        app.mode = AppMode::Dashboard;
+        app.handle_key(Key::Reject);
+        assert_eq!(app.alerts[0].status, AlertStatus::Pending);
+    }
+
+    #[test]
+    fn test_app_key_dismiss_in_dashboard_noop() {
+        let mut app = TuiApp::new();
+        app.add_alert("A", "r", "s", "");
+        app.mode = AppMode::Dashboard;
+        app.handle_key(Key::Dismiss);
+        assert_eq!(app.alerts[0].status, AlertStatus::Pending);
+    }
+
+    // ── Key handling — Next/Prev in Dashboard mode (no-op) ──
+
+    #[test]
+    fn test_app_key_next_in_dashboard_noop() {
+        let mut app = TuiApp::new();
+        app.add_alert("A", "r", "s", "");
+        app.add_alert("B", "r2", "s2", "");
+        app.mode = AppMode::Dashboard;
+        let before = app.selected_alert;
+        app.handle_key(Key::Next);
+        assert_eq!(app.selected_alert, before);
+    }
+
+    #[test]
+    fn test_app_key_prev_in_dashboard_noop() {
+        let mut app = TuiApp::new();
+        app.add_alert("A", "r", "s", "");
+        app.mode = AppMode::Dashboard;
+        let before = app.selected_alert;
+        app.handle_key(Key::Prev);
+        assert_eq!(app.selected_alert, before);
+    }
+
+    // ── Key handling — Unknown key ──
+
+    #[test]
+    fn test_app_key_unknown_noop() {
+        let mut app = TuiApp::new();
+        app.handle_key(Key::Unknown);
+        assert!(!app.should_quit);
+        assert_eq!(app.mode, AppMode::Dashboard);
+    }
+
+    // ── next_alert / prev_alert boundary conditions ──
+
+    #[test]
+    fn test_next_alert_no_more_pending() {
+        let mut app = TuiApp::new();
+        app.add_alert("A", "r", "s", "");
+        // Only one alert, already selected at 0
+        let initial = app.selected_alert;
+        app.next_alert();
+        // No next pending, selected stays the same
+        assert_eq!(app.selected_alert, initial);
+    }
+
+    #[test]
+    fn test_prev_alert_at_zero() {
+        let mut app = TuiApp::new();
+        app.add_alert("A", "r", "s", "");
+        assert_eq!(app.selected_alert, 0);
+        app.prev_alert();
+        assert_eq!(app.selected_alert, 0); // stays at 0
+    }
+
+    // ── status_line with tasks ──
+
+    #[test]
+    fn test_status_line_with_tasks() {
+        let mut app = TuiApp::new();
+        app.tasks_assigned = 5;
+        app.tasks_completed = 3;
+        let line = app.status_line();
+        assert!(line.contains("Tasks: 3/5"));
+        assert!(line.contains("Events: 0"));
+        assert!(line.contains("Alerts: 0 pending"));
+    }
+
+    // ── ActivityItem timestamp is set ──
+
+    #[test]
+    fn test_activity_item_timestamp_set() {
+        let before = now_millis();
+        let item = ActivityItem::new("Bot", ActivityAction::SystemInfo, "test");
+        let after = now_millis();
+        assert!(item.timestamp_ms >= before);
+        assert!(item.timestamp_ms <= after);
+    }
+
+    // ── TuiApp Default trait ──
+
+    #[test]
+    fn test_tuiapp_default() {
+        let app = TuiApp::default();
+        assert_eq!(app.online_agent_count(), 0);
+        assert_eq!(app.mode, AppMode::Dashboard);
+    }
+
+    // ── Alert fields are stored correctly ──
+
+    #[test]
+    fn test_alert_fields() {
+        let alert = Alert::new(7, "Bridge", "review", "Need approval", "Context details here");
+        assert_eq!(alert.id, 7);
+        assert_eq!(alert.from_agent, "Bridge");
+        assert_eq!(alert.reason, "review");
+        assert_eq!(alert.summary, "Need approval");
+        assert_eq!(alert.context, "Context details here");
+    }
+
+    // ── advance_to_next_pending: skip non-pending alerts ──
+
+    #[test]
+    fn test_advance_skips_non_pending() {
+        let mut app = TuiApp::new();
+        app.add_alert("A", "r1", "s1", ""); // index 0
+        app.add_alert("B", "r2", "s2", ""); // index 1
+        app.add_alert("C", "r3", "s3", ""); // index 2
+
+        // Dismiss first, should advance to index 1
+        app.dismiss_selected_alert();
+        assert_eq!(app.selected_alert, 1);
+        assert_eq!(app.alerts[0].status, AlertStatus::Dismissed);
+    }
+
+    // ── Multiple alerts: approve last one returns to dashboard ──
+
+    #[test]
+    fn test_approve_last_alert_returns_to_dashboard() {
+        let mut app = TuiApp::new();
+        app.add_alert("A", "r1", "s1", "");
+        // Approve the only alert
+        app.approve_selected_alert();
+        assert_eq!(app.mode, AppMode::Dashboard);
+        assert_eq!(app.pending_approvals, 0);
+    }
+
+    // ── process_agent_message increments event_count ──
+
+    #[test]
+    fn test_process_message_increments_event_count() {
+        let mut app = TuiApp::new();
+        let id = make_test_identity("Bot");
+
+        let msg1 = AgentMessage::text(&id, "msg1");
+        let msg2 = AgentMessage::text(&id, "msg2");
+        let msg3 = AgentMessage::heartbeat(&id, "online", 0.1);
+
+        app.process_agent_message(&msg1);
+        app.process_agent_message(&msg2);
+        app.process_agent_message(&msg3);
+
+        assert_eq!(app.event_count, 3);
+        assert_eq!(app.activities.len(), 3);
+    }
+
+    // ── AppMode equality ──
+
+    #[test]
+    fn test_app_mode_equality() {
+        assert_eq!(AppMode::Dashboard, AppMode::Dashboard);
+        assert_eq!(AppMode::AlertDetail, AppMode::AlertDetail);
+        assert_ne!(AppMode::Dashboard, AppMode::AlertDetail);
+    }
+
+    // ── Key equality ──
+
+    #[test]
+    fn test_key_equality() {
+        assert_eq!(Key::Quit, Key::Quit);
+        assert_eq!(Key::Approve, Key::Approve);
+        assert_ne!(Key::Approve, Key::Reject);
+        assert_eq!(Key::Unknown, Key::Unknown);
+    }
+}
