@@ -8,7 +8,6 @@
 use criterion::{
     black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput,
 };
-use ed25519_dalek::SigningKey;
 use walkie_talkie_core::identity::IdentityBuilder;
 use walkie_talkie_core::ratelimit::RateLimiter;
 use walkie_talkie_core::registry::AgentRegistry;
@@ -16,16 +15,12 @@ use walkie_talkie_core::registry::AgentRegistry;
 // ── Helpers ──────────────────────────────────────────────────────
 
 fn make_agent(name: &str, caps: &[&str]) -> walkie_talkie_core::identity::AgentIdentity {
-    let seed = {
-        let mut b = name.as_bytes().to_vec();
-        b.resize(32, 0);
-        b
-    };
-    let sk = SigningKey::from_bytes(&seed.try_into().unwrap());
+    // build_with_key is cfg(test) only; use regular build() for benchmarks
     IdentityBuilder::new(name)
         .capabilities(caps)
-        .build_with_key(&sk)
+        .build()
         .expect("agent build failed")
+        .0
 }
 
 // ── Registry benchmarks ──────────────────────────────────────────
@@ -48,7 +43,7 @@ fn bench_registry_register(c: &mut Criterion) {
                     |reg| {
                         for i in 0..n {
                             let agent = make_agent(&format!("Agent-{i}"), &["test"]);
-                            black_box(reg.register_agent("bench-tenant", agent));
+                            let _ = black_box(reg.register_agent("bench-tenant", agent));
                         }
                     },
                 )
@@ -76,7 +71,7 @@ fn bench_registry_discovery(c: &mut Criterion) {
 
                 b.iter(|| {
                     for i in 0..n {
-                        black_box(reg.find_agent("bench-tenant", &format!("did:walkie:{i}")));
+                        let _ = black_box(reg.find_agent("bench-tenant", &format!("did:walkie:{i}")));
                     }
                 })
             },
@@ -187,7 +182,7 @@ fn bench_multi_tenant_register(c: &mut Criterion) {
                             for j in 0..agents_per {
                                 let agent =
                                     make_agent(&format!("Agent-{ti}-{j}"), &["common"]);
-                                black_box(
+                                let _ = black_box(
                                     reg.register_agent(&format!("tenant-{ti}"), agent),
                                 );
                             }

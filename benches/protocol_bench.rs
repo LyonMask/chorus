@@ -14,7 +14,6 @@ fn make_identity(name: &str) -> walkie_talkie_core::identity::AgentIdentity {
 
 fn bench_message_construction(c: &mut Criterion) {
     let alice = make_identity("Alice 🤖");
-    let bob = make_identity("Bob 🔧");
 
     let mut group = c.benchmark_group("protocol/construction");
 
@@ -26,7 +25,7 @@ fn bench_message_construction(c: &mut Criterion) {
 
     group.bench_function("intent_message", |b| {
         b.iter(|| {
-            black_box(AgentMessage::intent(&alice, &bob, "code-review", "Review PR #42"))
+            black_box(AgentMessage::intent(&alice, "code-review", serde_json::json!("Review PR #42")))
         })
     });
 
@@ -34,7 +33,6 @@ fn bench_message_construction(c: &mut Criterion) {
         b.iter(|| {
             black_box(AgentMessage::task(
                 &alice,
-                &bob,
                 "run-benchmark",
                 serde_json::json!({"target": "crypto", "iterations": 1000}),
             ))
@@ -48,7 +46,6 @@ fn bench_message_serialization(c: &mut Criterion) {
     let alice = make_identity("Alice 🤖");
     let msg = AgentMessage::task(
         &alice,
-        &make_identity("Bob 🔧"),
         "benchmark",
         serde_json::json!({"key": "value", "nested": {"data": [1, 2, 3]}}),
     );
