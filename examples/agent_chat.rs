@@ -198,16 +198,12 @@ async fn run_demo() -> Result<(), Box<dyn Error>> {
     let mut steve_listen_addr = None;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
     while tokio::time::Instant::now() < deadline {
-        if let Some(event) = steve_rx.try_recv().ok() {
-            if let P2PEvent::Listening { address } = event {
-                // Use /ip4/127.0.0.1/ address for local testing
-                let addr_str = address.to_string();
-                if addr_str.contains("127.0.0.1") || addr_str.contains("0.0.0.0") {
-                    // Replace wildcard with localhost for dialing
-                    let local_addr = addr_str.replace("0.0.0.0", "127.0.0.1");
-                    steve_listen_addr = Some(local_addr);
-                    break;
-                }
+        if let Ok(P2PEvent::Listening { address }) = steve_rx.try_recv() {
+            let addr_str = address.to_string();
+            if addr_str.contains("127.0.0.1") || addr_str.contains("0.0.0.0") {
+                let local_addr = addr_str.replace("0.0.0.0", "127.0.0.1");
+                steve_listen_addr = Some(local_addr);
+                break;
             }
         }
         tokio::time::sleep(Duration::from_millis(100)).await;

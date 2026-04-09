@@ -79,8 +79,8 @@ fn main() {
 
     // Status bar
     println!("┌{}┐", line);
-    println!("│ 🏠 Walkie Talkie  │  源星公司  │  {}  │  {}  │",
-        format!("{} agents ({} online)", app.agents.len(), app.online_agent_count()),
+    println!("│ 🏠 Walkie Talkie  │  源星公司  │  {} agents ({} online)  │  {}  │",
+        app.agents.len(), app.online_agent_count(),
         if app.pending_approvals > 0 { format!("🔔 {} pending", app.pending_approvals) } else { "🔔 0".into() }
     );
     println!("├{}┤", line);
@@ -116,7 +116,7 @@ fn main() {
     for i in 0..max_lines {
         let left = agent_lines.get(i).map(|s| s.as_str()).unwrap_or("                                 ");
         let right = act_lines.get(i).map(|s| s.as_str()).unwrap_or("                                       ");
-        println!("│  │{}│  │{}││", format!("{:<30}", left), format!("{:<40}", right));
+        println!("│  │{:<30}│  │{:<40}││", left, right);
     }
 
     println!("│  │                              │  │                                    ││");
@@ -124,7 +124,7 @@ fn main() {
     println!("│{}│", space);
 
     // Status line
-    println!("│  {}│", format!("  {}", app.status_line()));
+    println!("│    {}│", app.status_line());
     println!("├{}┤", line);
     println!("│ [A] Alerts {} [D] Dashboard  [Y] Approve  [N] Reject  [Q] Quit       │",
         if app.pending_approvals > 0 { format!("({} pending)", app.pending_approvals) } else { "(none)    ".into() });
@@ -184,7 +184,7 @@ fn main() {
         }
 
         println!("├{}┤", line);
-        println!("│  {}│", format!("  {}", app.status_line()));
+        println!("│    {}│", app.status_line());
         println!("└{}┘", line);
         println!();
     }

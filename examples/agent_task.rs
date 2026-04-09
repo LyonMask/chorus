@@ -74,7 +74,7 @@ async fn main() -> anyhow::Result<()> {
             if line.is_empty() { continue; }
             let parts: Vec<&str> = line.split_whitespace().collect();
 
-            match parts.get(0).map(|s| *s) {
+            match parts.first().copied() {
                 Some("task") => {
                     // task <name> [json_params]
                     if parts.len() < 2 {

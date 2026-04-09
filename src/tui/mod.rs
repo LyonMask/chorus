@@ -354,8 +354,8 @@ impl TuiApp {
             let did = &msg.from_agent.agent_id;
             if let Some(agent) = self.agents.get_mut(did) {
                 agent.online = true;
-                if let Some(load_str) = msg.payload_str("load") {
-                    agent.load = load_str.parse::<f32>().unwrap_or(0.0);
+                if let Some(load_val) = msg.payload.get("load").and_then(|v| v.as_f64()) {
+                    agent.load = load_val as f32;
                 }
             }
         }

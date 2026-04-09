@@ -363,8 +363,8 @@ impl App {
                 self.add_alert(
                     &actor,
                     reason,
-                    &summary,
-                    &context,
+                    summary,
+                    context.as_str(),
                     &msg.summary(),
                 );
                 ("HUMAN_ESCALATION".to_string(),
