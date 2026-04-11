@@ -308,7 +308,7 @@ async fn handle_structured_message(
             let task = msg.payload_str("task").unwrap_or("?");
             println!("  [TASK←] {} → me: {} — {:?}", msg.from_agent.display_name, task, msg.payload);
             // Auto-reply: accept
-            let reply = msg.make_reply(serde_json::json!({
+            let reply = msg.make_reply(&my_identity, serde_json::json!({
                 "status": "accepted",
                 "eta_ms": 5000,
             }));
@@ -334,7 +334,7 @@ async fn handle_structured_message(
                 .and_then(|v| v.as_str())
                 .map(|cap| my_identity.has_capability(cap))
                 .unwrap_or(true);
-            let reply = msg.make_reply(serde_json::json!({
+            let reply = msg.make_reply(&my_identity, serde_json::json!({
                 "can_do": can_do,
                 "eta_ms": if can_do { 3000 } else { 0 },
             }));

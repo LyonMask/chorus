@@ -31,6 +31,8 @@ base64 = "0.22"
 axum = "0.7"
 ratatui = { version = "0.28", optional = true }
 crossterm = { version = "0.28", optional = true }
+secrecy = "0.10"
+zeroize = { version = "1", features = ["derive"] }
 
 [build-dependencies]
 napi-build = { version = "2", optional = true }
