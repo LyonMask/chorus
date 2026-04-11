@@ -715,7 +715,7 @@ fn handle_crypto_envelope(
     match envelope {
         CryptoEnvelope::KeyOffer { public_key } => {
             tracing::info!(target: "crypto", "🔑 KeyOffer from {from}");
-            match CryptoLayer::diffie_hellman(&my_keys.private, &public_key) {
+            match CryptoLayer::diffie_hellman(my_keys.private_key(), &public_key) {
                 Ok(shared) => {
                     let already = crypto.has_session(&peer_str);
                     crypto.create_session(&peer_str, &shared);
@@ -753,7 +753,7 @@ fn handle_crypto_envelope(
 
         CryptoEnvelope::KeyAccept { public_key } => {
             tracing::info!(target: "crypto", "🔑 KeyAccept from {from}");
-            match CryptoLayer::diffie_hellman(&my_keys.private, &public_key) {
+            match CryptoLayer::diffie_hellman(my_keys.private_key(), &public_key) {
                 Ok(shared) => {
                     let already = crypto.has_session(&peer_str);
                     crypto.create_session(&peer_str, &shared);

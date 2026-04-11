@@ -239,15 +239,12 @@ impl AgentMessage {
         self
     }
 
-    /// Create a reply message with the same to/from swapped.
-    pub fn make_reply(&self, reply_payload: serde_json::Value) -> Self {
-        let mut reply = Self::new(
-            // Note: in practice the caller would set the correct from_agent
-            // for the replying agent. We use the original's to_agent as a hint.
-            &self.from_agent,
-            self.protocol.clone(),
-            reply_payload,
-        );
+    /// Create a reply message to this message.
+    ///
+    /// `from` is the identity of the agent sending the reply.
+    /// The reply is addressed back to the original sender (`self.from_agent`).
+    pub fn make_reply(&self, from: &AgentIdentity, reply_payload: serde_json::Value) -> Self {
+        let mut reply = Self::new(from, self.protocol.clone(), reply_payload);
         reply.to_agent = self.from_agent.agent_id.clone();
         reply.reply_to = Some(self.id.clone());
         reply.timestamp = default_timestamp();
@@ -526,13 +523,20 @@ mod tests {
         let alice = make_test_agent("Alice");
         let bob = make_test_agent("Bob");
 
+        // Alice sends a task to Bob
         let original = AgentMessage::new(&alice, MessageProtocol::TaskAssignment, serde_json::json!({"task":"X"}))
             .to(&bob.agent_id);
 
-        let reply = original.make_reply(serde_json::json!({"result":"ok"}));
+        // Bob replies -- from_agent must be Bob, not Alice
+        let reply = original.make_reply(&bob, serde_json::json!({"result":"ok"}));
 
+        // Reply references the original message
         assert_eq!(reply.reply_to.as_ref().unwrap(), &original.id);
+        // Reply is addressed back to Alice (the original sender)
         assert_eq!(reply.to_agent, alice.agent_id);
+        // Reply comes FROM Bob, NOT from Alice (this was the bug)
+        assert_eq!(reply.from_agent.agent_id, bob.agent_id);
+        assert_eq!(reply.from_agent.display_name, "Bob");
     }
 
     // ── Convenience builders ──
