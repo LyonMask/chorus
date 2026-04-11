@@ -194,11 +194,20 @@ impl CryptoLayer {
     }
 
     /// Decrypt a message from a specific peer.
+    /// Decrypt a message from a specific peer.
+    ///
+    /// Returns  if the session has exceeded its TTL
+    /// or message count limit, consistent with .
     pub fn decrypt_from(&mut self, peer_id: &str, data: &[u8]) -> Result<Vec<u8>> {
         let session = self
             .sessions
             .get_mut(peer_id)
             .ok_or_else(|| Error::PeerNotFound(peer_id.to_string()))?;
+
+        if session.should_rotate() {
+            return Err(Error::SessionExpired(peer_id.to_string()));
+        }
+
         session.decrypt(data)
     }
 
@@ -480,6 +489,40 @@ mod tests {
     }
 
     #[test]
+    #[test]
+    fn test_decrypt_for_rejects_expired_session() {
+        let mut alice = CryptoLayer::new();
+        let mut bob = CryptoLayer::new();
+
+        let alice_keys = alice.generate_keypair().unwrap();
+        let bob_keys = bob.generate_keypair().unwrap();
+
+        let shared = CryptoLayer::diffie_hellman(
+            alice_keys.private_key(),
+            &bob_keys.public,
+        )
+        .unwrap();
+        alice.create_session("bob", &shared);
+        bob.create_session("alice", &CryptoLayer::diffie_hellman(
+            bob_keys.private_key(), &alice_keys.public
+        ).unwrap());
+
+        // Alice encrypts while session is fresh
+        let enc = alice.encrypt_for("bob", b"before expiry").unwrap();
+
+        // Manually expire bob's session
+        let session = bob.sessions.get_mut("alice").unwrap();
+        session.counter = MAX_MESSAGES_PER_SESSION;
+
+        // Decryption should fail with SessionExpired
+        let result = bob.decrypt_from("alice", &enc);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            Error::SessionExpired(peer) => assert_eq!(peer, "alice"),
+            other => panic!("Expected SessionExpired, got: {other}"),
+        }
+    }
+
     fn test_is_session_expired_and_remove() {
         let mut alice = CryptoLayer::new();
         let bob = CryptoLayer::new();
