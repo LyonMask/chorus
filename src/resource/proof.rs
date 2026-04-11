@@ -171,6 +171,7 @@ impl StorageProof {
 }
 
 /// PoR-lite verifier: statistical validity check.
+#[derive(Debug)]
 pub struct PoRVerifier {
     /// Number of successful challenges.
     pub successes: u32,

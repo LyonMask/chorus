@@ -17,9 +17,11 @@ mod table;
 mod session;
 mod proof;
 mod backoff;
+mod engine;
 
 pub use types::*;
 pub use table::ResourceTable;
 pub use session::ResourceSessionManager;
 pub use proof::{BandwidthReceipt, PoRVerifier, StorageChallenge, StorageProof, WorkReceipt};
 pub use backoff::RequestBackoff;
+pub use engine::{ContributionEngine, MaintenanceReport};
