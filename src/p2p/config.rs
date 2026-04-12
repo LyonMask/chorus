@@ -1,9 +1,8 @@
 //! P2P configuration and internal commands.
 
-
 use crate::identity::AgentIdentity;
 use crate::protocol::AgentMessage;
-
+use super::direct::DirectRequest;
 
 // ─── Configuration ───────────────────────────────────────────────
 
@@ -29,26 +28,13 @@ impl Default for P2PConfig {
             listen_on: vec!["/ip4/0.0.0.0/tcp/0".to_string()],
             bootstrap_peers: vec![],
             enable_mdns: true,
-            agent_version: Some("walkie-talkie-core/0.2.0".to_string()),
+            agent_version: Some("walkie-talkie-core/0.3.0".to_string()),
             idle_timeout_secs: 60,
             ping_interval_secs: 15,
             ping_timeout_secs: 20,
             auto_key_exchange: true,
             agent_identity: None,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_default_config() {
-        let config = P2PConfig::default();
-        assert!(config.enable_mdns);
-        assert!(config.auto_key_exchange);
-        assert_eq!(config.listen_on.len(), 1);
     }
 }
 
@@ -72,13 +58,13 @@ pub(crate) enum P2PCommand {
         data: Vec<u8>,
         reply: tokio::sync::oneshot::Sender<anyhow::Result<libp2p::gossipsub::MessageId>>,
     },
-    /// Encrypt plaintext for a specific peer and send via Gossipsub.
+    /// Encrypt plaintext for a specific peer and send via Direct channel.
     SendEncrypted {
         peer_id: libp2p::PeerId,
         plaintext: Vec<u8>,
         reply: tokio::sync::oneshot::Sender<anyhow::Result<()>>,
     },
-    /// Manually trigger key exchange with a peer.
+    /// Manually trigger key exchange with a peer (via Direct channel).
     InitKeyExchange {
         peer_id: libp2p::PeerId,
         reply: tokio::sync::oneshot::Sender<anyhow::Result<()>>,
@@ -96,8 +82,20 @@ pub(crate) enum P2PCommand {
         message: AgentMessage,
         reply: tokio::sync::oneshot::Sender<anyhow::Result<()>>,
     },
+    /// Send a pre-built DirectRequest to a peer via Direct channel.
+    #[allow(dead_code)]
+    SendDirect {
+        peer_id: libp2p::PeerId,
+        request: DirectRequest,
+        reply: tokio::sync::oneshot::Sender<anyhow::Result<()>>,
+    },
     /// Check if we have an encrypted session with a peer.
     HasSession {
+        peer_id: libp2p::PeerId,
+        reply: tokio::sync::oneshot::Sender<bool>,
+    },
+    /// Check if a peer is currently connected.
+    IsConnected {
         peer_id: libp2p::PeerId,
         reply: tokio::sync::oneshot::Sender<bool>,
     },
@@ -108,4 +106,17 @@ pub(crate) enum P2PCommand {
         reply: tokio::sync::oneshot::Sender<Vec<libp2p::Multiaddr>>,
     },
     Shutdown,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_config() {
+        let config = P2PConfig::default();
+        assert!(config.enable_mdns);
+        assert!(config.auto_key_exchange);
+        assert_eq!(config.listen_on.len(), 1);
+    }
 }

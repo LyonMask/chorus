@@ -4,7 +4,7 @@
 //! spawns the swarm loop in a background tokio task and returns a handle
 //! (`P2PNetwork`) for sending commands and an event receiver.
 
-use libp2p::{gossipsub, identify, mdns, ping, Multiaddr, PeerId};
+use libp2p::{gossipsub, identify, mdns, ping, request_response, Multiaddr, PeerId};
 use std::{collections::HashMap, time::Duration};
 use tokio::sync::{mpsc, oneshot};
 
@@ -14,6 +14,7 @@ use crate::crypto::CryptoLayer;
 
 use super::behaviour::WalkieBehaviour;
 use super::config::{P2PCommand, P2PConfig};
+use super::direct::{self, PendingMessageStore};
 use super::envelope::{CryptoEnvelope, WT_TOPIC};
 use super::event::P2PEvent;
 use super::handler;
@@ -32,16 +33,12 @@ pub struct P2PNetwork {
 
 impl P2PNetwork {
     /// Create a new P2P network node with integrated E2EE.
-    ///
-    /// Generates an X25519 keypair for this node. Key exchange is
-    /// automatically initiated when peers connect (configurable).
     pub fn new(
         config: P2PConfig,
     ) -> anyhow::Result<(Self, mpsc::UnboundedReceiver<P2PEvent>)> {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<P2PCommand>();
 
-        // Generate our X25519 keypair
         let crypto = CryptoLayer::new();
         let my_keys = crypto.generate_keypair()
             .map_err(|e| anyhow::anyhow!("keypair generation: {e}"))?;
@@ -68,7 +65,7 @@ impl P2PNetwork {
                 let agent_version = config
                     .agent_version
                     .clone()
-                    .unwrap_or_else(|| "walkie-talkie-core/0.2.0".into());
+                    .unwrap_or_else(|| "walkie-talkie-core/0.3.0".into());
                 let identify = identify::Behaviour::new(
                     identify::Config::new("/walkie-talkie/id/1.0.0".into(), key.public())
                         .with_agent_version(agent_version),
@@ -85,7 +82,9 @@ impl P2PNetwork {
                     local_peer_id,
                 )?;
 
-                Ok(WalkieBehaviour { gossipsub, identify, ping: ping_behaviour, mdns })
+                let direct = direct::new_direct_behaviour();
+
+                Ok(WalkieBehaviour { gossipsub, identify, ping: ping_behaviour, mdns, direct })
             })?
             .with_swarm_config(|cfg: libp2p::swarm::Config| {
                 cfg.with_idle_connection_timeout(Duration::from_secs(config.idle_timeout_secs))
@@ -105,7 +104,7 @@ impl P2PNetwork {
             }
         }
 
-        // Bootstrap
+        // Bootstrap dial
         let bootstrap = config.bootstrap_peers.clone();
         let bootstrap_cmd_tx = cmd_tx.clone();
         if !bootstrap.is_empty() {
@@ -126,9 +125,10 @@ impl P2PNetwork {
         let auto_kx = config.auto_key_exchange;
         let agent_identity = config.agent_identity.clone();
 
-        // ── Swarm event loop (owns CryptoLayer) ──
+        // ── Swarm event loop ──
         tokio::spawn(async move {
             let mut crypto = crypto;
+            let pending_store = PendingMessageStore::new();
             let mut mdns_peer_addrs: HashMap<PeerId, Vec<Multiaddr>> = HashMap::new();
 
             loop {
@@ -142,11 +142,21 @@ impl P2PNetwork {
                                 tracing::info!(
                                     target: "p2p",
                                     "✓ connected to {peer_id} ({} conns, via {:?})",
-                                    num_established,
-                                    endpoint.get_remote_address(),
+                                    num_established, endpoint.get_remote_address(),
                                 );
                                 let _ = event_tx.send(P2PEvent::PeerConnected { peer_id });
 
+                                // P0-3: Drain pending messages
+                                if let Some(messages) = pending_store.drain(&peer_id) {
+                                    let count = messages.len();
+                                    tracing::info!(target: "p2p", "📤 draining {count} pending messages for {peer_id}");
+                                    for msg in messages {
+                                        swarm.behaviour_mut().direct.send_request(&peer_id, msg);
+                                    }
+                                    let _ = event_tx.send(P2PEvent::PendingMessagesSent { peer_id, count });
+                                }
+
+                                // Auto key exchange via Direct channel
                                 if auto_kx {
                                     handler::send_key_offer(&mut swarm, &my_keys, &peer_id);
                                     let cmd_tx_retry = swarm_cmd_tx.clone();
@@ -178,7 +188,7 @@ impl P2PNetwork {
                                 tracing::warn!(target: "p2p", "incoming error: {error}");
                             }
 
-                            // ── Gossipsub ──
+                            // ── Gossipsub (broadcast + legacy) ──
                             libp2p::swarm::SwarmEvent::Behaviour(
                                 super::WalkieBehaviourEvent::Gossipsub(
                                     gossipsub::Event::Message {
@@ -187,43 +197,81 @@ impl P2PNetwork {
                                 ),
                             ) => {
                                 let from = message.source.unwrap_or(propagation_source);
-                                if from == our_peer_id { return; }
-
-                                tracing::trace!(
-                                    target: "crypto",
-                                    "📨 gossipsub msg from {from}, {} bytes",
-                                    message.data.len()
-                                );
+                                if from == our_peer_id { continue; }
+                                tracing::trace!(target: "crypto", "📨 gossipsub msg from {from}, {} bytes", message.data.len());
                                 if let Ok(envelope) = serde_json::from_slice::<CryptoEnvelope>(&message.data) {
                                     handler::handle_crypto_envelope(
-                                        from,
-                                        envelope,
-                                        &mut crypto,
-                                        &my_keys,
-                                        &mut swarm,
-                                        &event_tx,
-                                        &agent_identity,
+                                        from, envelope, &mut crypto, &my_keys,
+                                        &mut swarm, &event_tx, &agent_identity,
                                     );
                                 } else {
-                                    let _ = event_tx.send(P2PEvent::RawMessage {
-                                        from,
-                                        data: message.data,
-                                    });
+                                    let _ = event_tx.send(P2PEvent::RawMessage { from, data: message.data });
                                 }
                             }
                             libp2p::swarm::SwarmEvent::Behaviour(
                                 super::WalkieBehaviourEvent::Gossipsub(
                                     gossipsub::Event::Subscribed { peer_id, topic },
                                 ),
-                            ) => {
-                                tracing::debug!(target: "p2p", "{peer_id} subscribed {topic}");
-                            }
+                            ) => { tracing::debug!(target: "p2p", "{peer_id} subscribed {topic}"); }
                             libp2p::swarm::SwarmEvent::Behaviour(
                                 super::WalkieBehaviourEvent::Gossipsub(
                                     gossipsub::Event::Unsubscribed { peer_id, topic },
                                 ),
+                            ) => { tracing::debug!(target: "p2p", "{peer_id} unsubscribed {topic}"); }
+
+                            // ── Direct channel (P0-3) ──
+                            libp2p::swarm::SwarmEvent::Behaviour(
+                                super::WalkieBehaviourEvent::Direct(
+                                    request_response::Event::Message {
+                                        peer,
+                                        message: request_response::Message::Request { request, channel, .. },
+                                        ..
+                                    },
+                                ),
                             ) => {
-                                tracing::debug!(target: "p2p", "{peer_id} unsubscribed {topic}");
+                                tracing::trace!(target: "p2p", "📨 direct request from {peer}: request_id={}", request.request_id);
+                                let response = handler::handle_direct_request(
+                                    peer, request, &mut crypto, &my_keys,
+                                    &mut swarm, &event_tx, &agent_identity,
+                                );
+                                let _ = swarm.behaviour_mut().direct.send_response(channel, response);
+                            }
+                            libp2p::swarm::SwarmEvent::Behaviour(
+                                super::WalkieBehaviourEvent::Direct(
+                                    request_response::Event::Message {
+                                        peer,
+                                        message: request_response::Message::Response { request_id, response, .. },
+                                        ..
+                                    },
+                                ),
+                            ) => {
+                                tracing::trace!(target: "p2p", "📨 direct response from {peer}: request_id={request_id}, status={:?}", response.status);
+                                let _ = event_tx.send(P2PEvent::DirectResponse { from: peer, response });
+                            }
+                            libp2p::swarm::SwarmEvent::Behaviour(
+                                super::WalkieBehaviourEvent::Direct(
+                                    request_response::Event::OutboundFailure { peer, request_id, error, .. },
+                                ),
+                            ) => {
+                                tracing::warn!(target: "p2p", "📤 direct send failed to {peer}: request_id={request_id}, error={error}");
+                                let _ = event_tx.send(P2PEvent::DirectSendFailed {
+                                    peer_id: peer,
+                                    reason: format!("outbound failure: {error}"),
+                                });
+                            }
+                            libp2p::swarm::SwarmEvent::Behaviour(
+                                super::WalkieBehaviourEvent::Direct(
+                                    request_response::Event::InboundFailure { peer, error, .. },
+                                ),
+                            ) => {
+                                tracing::warn!(target: "p2p", "📥 direct inbound failure from {peer}: {error}");
+                            }
+                            libp2p::swarm::SwarmEvent::Behaviour(
+                                super::WalkieBehaviourEvent::Direct(
+                                    request_response::Event::ResponseSent { peer, .. },
+                                ),
+                            ) => {
+                                tracing::trace!(target: "p2p", "📨 direct response sent to {peer}");
                             }
 
                             // ── Identify ──
@@ -232,51 +280,33 @@ impl P2PNetwork {
                                     identify::Event::Received { peer_id, info, .. },
                                 ),
                             ) => {
-                                tracing::info!(
-                                    target: "p2p",
-                                    "🔐 identified {peer_id}: agent={}",
-                                    info.agent_version,
-                                );
-                                let _ = event_tx.send(P2PEvent::Identify {
-                                    peer_id, info: Box::new(info),
-                                });
+                                tracing::info!(target: "p2p", "🔐 identified {peer_id}: agent={}", info.agent_version);
+                                let _ = event_tx.send(P2PEvent::Identify { peer_id, info: Box::new(info) });
                             }
                             libp2p::swarm::SwarmEvent::Behaviour(
-                                super::WalkieBehaviourEvent::Identify(
-                                    identify::Event::Pushed { .. },
-                                ),
+                                super::WalkieBehaviourEvent::Identify(identify::Event::Pushed { .. })
                             ) | libp2p::swarm::SwarmEvent::Behaviour(
-                                super::WalkieBehaviourEvent::Identify(
-                                    identify::Event::Sent { .. },
-                                ),
+                                super::WalkieBehaviourEvent::Identify(identify::Event::Sent { .. })
                             ) => {}
 
                             // ── Ping ──
                             libp2p::swarm::SwarmEvent::Behaviour(
-                                super::WalkieBehaviourEvent::Ping(
-                                    ping::Event { peer, result: Ok(rtt), .. },
-                                ),
+                                super::WalkieBehaviourEvent::Ping(ping::Event { peer, result: Ok(rtt), .. }),
                             ) => {
                                 tracing::trace!(target: "p2p", "🏓 ping {peer}: {rtt:?}");
                                 let _ = event_tx.send(P2PEvent::PingSuccess { peer_id: peer, rtt });
                             }
                             libp2p::swarm::SwarmEvent::Behaviour(
-                                super::WalkieBehaviourEvent::Ping(
-                                    ping::Event { peer, result: Err(error), .. },
-                                ),
+                                super::WalkieBehaviourEvent::Ping(ping::Event { peer, result: Err(error), .. }),
                             ) => {
                                 let err_str = error.to_string();
                                 tracing::warn!(target: "p2p", "🏓 ping FAIL {peer}: {err_str}");
-                                let _ = event_tx.send(P2PEvent::PingFailure {
-                                    peer_id: peer, error: err_str,
-                                });
+                                let _ = event_tx.send(P2PEvent::PingFailure { peer_id: peer, error: err_str });
                             }
 
                             // ── mDNS ──
                             libp2p::swarm::SwarmEvent::Behaviour(
-                                super::WalkieBehaviourEvent::Mdns(
-                                    mdns::Event::Discovered(list),
-                                ),
+                                super::WalkieBehaviourEvent::Mdns(mdns::Event::Discovered(list)),
                             ) => {
                                 for (pid, addr) in list {
                                     mdns_peer_addrs.entry(pid).or_default().push(addr.clone());
@@ -285,9 +315,7 @@ impl P2PNetwork {
                                 }
                             }
                             libp2p::swarm::SwarmEvent::Behaviour(
-                                super::WalkieBehaviourEvent::Mdns(
-                                    mdns::Event::Expired(list),
-                                ),
+                                super::WalkieBehaviourEvent::Mdns(mdns::Event::Expired(list)),
                             ) => {
                                 for (pid, _addr) in list {
                                     mdns_peer_addrs.remove(&pid);
@@ -322,51 +350,69 @@ impl P2PNetwork {
                                     .and_then(|addr| swarm.dial(addr.clone()).map_err(|e| anyhow::anyhow!("{e}")));
                                 let _ = reply.send(result);
                             }
+
+                            // Broadcast: stays on Gossipsub
                             Some(P2PCommand::Broadcast { data, reply }) => {
                                 let result = swarm.behaviour_mut().gossipsub.publish(wt_topic(), data);
                                 let _ = reply.send(result.map_err(|e| anyhow::anyhow!("{e}")));
                             }
+
+                            // P0-3: SendEncrypted → Direct channel
                             Some(P2PCommand::SendEncrypted { peer_id: target, plaintext, reply }) => {
-                                let peer_str = target.to_string();
-                                let result = crypto.encrypt_for(&peer_str, &plaintext)
-                                    .map_err(|e| anyhow::anyhow!("{e}"))
-                                    .and_then(|ciphertext| {
-                                        let envelope = CryptoEnvelope::Encrypted { ciphertext };
-                                        serde_json::to_vec(&envelope)
-                                            .map_err(|e| anyhow::anyhow!("serialize: {e}"))
-                                    })
-                                    .and_then(|bytes| {
-                                        swarm.behaviour_mut().gossipsub.publish(wt_topic(), bytes)
-                                            .map_err(|e| anyhow::anyhow!("{e}"))
-                                    });
-                                let _ = reply.send(result.map(|_| ()));
+                                let result = (|| -> anyhow::Result<()> {
+                                    let peer_str = target.to_string();
+                                    let ciphertext = crypto.encrypt_for(&peer_str, &plaintext)
+                                        .map_err(|e| anyhow::anyhow!("{e}"))?;
+                                    let request = direct::encrypted_request(ciphertext);
+                                    if swarm.is_connected(&target) {
+                                        swarm.behaviour_mut().direct.send_request(&target, request);
+                                    } else {
+                                        if !pending_store.store(target, request) {
+                                            return Err(anyhow::anyhow!("pending queue full for {target}"));
+                                        }
+                                    }
+                                    Ok(())
+                                })();
+                                let _ = reply.send(result);
                             }
-                            Some(P2PCommand::InitKeyExchange { peer_id: _target, reply }) => {
-                                let envelope = CryptoEnvelope::KeyOffer {
-                                    public_key: my_keys.public.clone(),
-                                };
-                                let result = serde_json::to_vec(&envelope)
-                                    .map_err(|e| anyhow::anyhow!("serialize: {e}"))
-                                    .and_then(|bytes| {
-                                        swarm.behaviour_mut().gossipsub.publish(wt_topic(), bytes)
-                                            .map_err(|e| anyhow::anyhow!("{e}"))
-                                    });
-                                let _ = reply.send(result.map(|_| ()));
+
+                            // P0-3: InitKeyExchange → Direct channel
+                            Some(P2PCommand::InitKeyExchange { peer_id: target, reply }) => {
+                                let request = direct::key_offer_request(my_keys.public.clone());
+                                let result = (|| -> anyhow::Result<()> {
+                                    if swarm.is_connected(&target) {
+                                        swarm.behaviour_mut().direct.send_request(&target, request);
+                                    } else {
+                                        if !pending_store.store(target, request) {
+                                            return Err(anyhow::anyhow!("pending queue full for {target}"));
+                                        }
+                                    }
+                                    Ok(())
+                                })();
+                                let _ = reply.send(result);
                             }
+
+                            // P0-3: SendStructured → Direct channel
                             Some(P2PCommand::SendStructured { peer_id: target, message, reply }) => {
                                 let result = (|| -> anyhow::Result<()> {
                                     let plaintext = message.to_json_bytes()?;
                                     let peer_str = target.to_string();
                                     let ciphertext = crypto.encrypt_for(&peer_str, &plaintext)
                                         .map_err(|e| anyhow::anyhow!("{e}"))?;
-                                    let envelope = CryptoEnvelope::Encrypted { ciphertext };
-                                    let bytes = serde_json::to_vec(&envelope)?;
-                                    swarm.behaviour_mut().gossipsub.publish(wt_topic(), bytes)
-                                        .map_err(|e| anyhow::anyhow!("{e}"))?;
+                                    let request = direct::encrypted_request(ciphertext);
+                                    if swarm.is_connected(&target) {
+                                        swarm.behaviour_mut().direct.send_request(&target, request);
+                                    } else {
+                                        if !pending_store.store(target, request) {
+                                            return Err(anyhow::anyhow!("pending queue full for {target}"));
+                                        }
+                                    }
                                     Ok(())
                                 })();
                                 let _ = reply.send(result);
                             }
+
+                            // BroadcastStructured: stays on Gossipsub
                             Some(P2PCommand::BroadcastStructured { message, reply }) => {
                                 let result = (|| -> anyhow::Result<()> {
                                     let plaintext = message.to_json_bytes()?;
@@ -387,8 +433,27 @@ impl P2PNetwork {
                                 })();
                                 let _ = reply.send(result);
                             }
+
+                            // P0-3: SendDirect (pre-built request)
+                            Some(P2PCommand::SendDirect { peer_id: target, request, reply }) => {
+                                let result = (|| -> anyhow::Result<()> {
+                                    if swarm.is_connected(&target) {
+                                        swarm.behaviour_mut().direct.send_request(&target, request);
+                                    } else {
+                                        if !pending_store.store(target, request) {
+                                            return Err(anyhow::anyhow!("pending queue full for {target}"));
+                                        }
+                                    }
+                                    Ok(())
+                                })();
+                                let _ = reply.send(result);
+                            }
+
                             Some(P2PCommand::HasSession { peer_id: target, reply }) => {
                                 let _ = reply.send(crypto.has_session(&target.to_string()));
+                            }
+                            Some(P2PCommand::IsConnected { peer_id: target, reply }) => {
+                                let _ = reply.send(swarm.is_connected(&target));
                             }
                             Some(P2PCommand::ListPeers { reply }) => {
                                 let peers: Vec<PeerId> = swarm.connected_peers().copied().collect();
@@ -436,22 +501,22 @@ impl P2PNetwork {
         rx.await?
     }
 
-    /// Broadcast raw bytes (no encryption).
+    /// Broadcast raw bytes (no encryption) via Gossipsub.
     pub async fn broadcast(&self, data: Vec<u8>) -> anyhow::Result<gossipsub::MessageId> {
         let (reply, rx) = oneshot::channel();
         self.cmd_tx.send(P2PCommand::Broadcast { data, reply })?;
         rx.await?
     }
 
-    /// Encrypt and send a plaintext message to a specific peer.
-    /// Requires an established E2EE session (auto via auto_key_exchange).
+    /// Encrypt and send a plaintext message to a specific peer via Direct channel.
+    /// If peer is offline, message is stored for delivery on reconnect.
     pub async fn send_encrypted(&self, peer_id: PeerId, plaintext: Vec<u8>) -> anyhow::Result<()> {
         let (reply, rx) = oneshot::channel();
         self.cmd_tx.send(P2PCommand::SendEncrypted { peer_id, plaintext, reply })?;
         rx.await?
     }
 
-    /// Manually trigger key exchange with a peer.
+    /// Manually trigger key exchange with a peer via Direct channel.
     pub async fn init_key_exchange(&self, peer_id: PeerId) -> anyhow::Result<()> {
         let (reply, rx) = oneshot::channel();
         self.cmd_tx.send(P2PCommand::InitKeyExchange { peer_id, reply })?;
@@ -462,6 +527,13 @@ impl P2PNetwork {
     pub async fn has_session(&self, peer_id: &PeerId) -> anyhow::Result<bool> {
         let (reply, rx) = oneshot::channel();
         self.cmd_tx.send(P2PCommand::HasSession { peer_id: *peer_id, reply })?;
+        Ok(rx.await?)
+    }
+
+    /// Check if a peer is currently connected.
+    pub async fn is_connected(&self, peer_id: &PeerId) -> anyhow::Result<bool> {
+        let (reply, rx) = oneshot::channel();
+        self.cmd_tx.send(P2PCommand::IsConnected { peer_id: *peer_id, reply })?;
         Ok(rx.await?)
     }
 

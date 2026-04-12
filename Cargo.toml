@@ -1,6 +1,6 @@
 [package]
 name = "walkie-talkie-core"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 
 [features]
@@ -12,6 +12,7 @@ tui = ["dep:ratatui", "dep:crossterm"]
 libp2p = { version = "0.54", features = [
     "tcp", "tokio", "noise", "yamux", "macros",
     "identify", "ping", "gossipsub", "mdns",
+    "request-response",
 ] }
 tokio = { version = "1", features = ["full"] }
 x25519-dalek = { version = "2.0", features = ["static_secrets"] }
@@ -32,6 +33,7 @@ axum = "0.7"
 ratatui = { version = "0.28", optional = true }
 crossterm = { version = "0.28", optional = true }
 secrecy = "0.10"
+async-trait = "0.1"
 zeroize = { version = "1", features = ["derive"] }
 
 [build-dependencies]

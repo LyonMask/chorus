@@ -6,6 +6,8 @@ use std::time::Duration;
 use crate::identity::AgentIdentity;
 use crate::protocol::AgentMessage;
 
+use super::direct::{DirectPayload, DirectResponse};
+
 /// Events emitted by `P2PNetwork`.
 #[derive(Debug, Clone)]
 pub enum P2PEvent {
@@ -79,6 +81,29 @@ pub enum P2PEvent {
     PingFailure {
         peer_id: PeerId,
         error: String,
+    },
+    /// ── Direct channel events (P0-3) ──
+
+    /// Incoming direct request from a peer (payload already parsed).
+    DirectMessage {
+        from: PeerId,
+        request_id: u64,
+        payload: DirectPayload,
+    },
+    /// Direct request to a peer failed (peer not connected or send error).
+    DirectSendFailed {
+        peer_id: PeerId,
+        reason: String,
+    },
+    /// Response received for a direct request we sent.
+    DirectResponse {
+        from: PeerId,
+        response: DirectResponse,
+    },
+    /// Pending messages were drained and sent to a peer that just connected.
+    PendingMessagesSent {
+        peer_id: PeerId,
+        count: usize,
     },
 }
 
