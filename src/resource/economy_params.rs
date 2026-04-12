@@ -370,35 +370,37 @@ mod tests {
 
     #[test]
     fn test_balance_thresholds_ordering() {
-        assert!(BALANCE_THRESHOLD_FREE_TIER > BALANCE_THRESHOLD_ISOLATION);
-        assert!(BALANCE_THRESHOLD_ISOLATION > BALANCE_THRESHOLD_DISCONNECT);
+        const { assert!(BALANCE_THRESHOLD_FREE_TIER > BALANCE_THRESHOLD_ISOLATION) };
+        const { assert!(BALANCE_THRESHOLD_ISOLATION > BALANCE_THRESHOLD_DISCONNECT) };
     }
 
     #[test]
     fn test_all_params_positive() {
-        assert!(CRP_WEIGHT_CPU > 0.0);
-        assert!(WC_CONVERSION_EFFICIENCY > 0.0);
-        assert!(WC_BALANCE_DECAY_RATE_PER_HOUR > 0.0);
-        assert!(INITIAL_WC_GRANT > 0.0);
-        assert!(GUARANTOR_MIN_WC > 0.0);
-        assert!(GUARANTOR_MAX_GUARANTEES > 0);
-        assert!(GUARANTOR_COOLDOWN_DAYS > 0);
-        assert!(BROADCAST_COST_CAP > 0.0);
-        assert!(CRP_CAP_BASE > 0.0);
-        assert!(CRP_CAP_COEFF > 0.0);
-        assert!(PIONEER_NUMERATOR > 0.0);
+        const { assert!(CRP_WEIGHT_CPU > 0.0) };
+        const { assert!(WC_CONVERSION_EFFICIENCY > 0.0) };
+        const { assert!(WC_BALANCE_DECAY_RATE_PER_HOUR > 0.0) };
+        const { assert!(INITIAL_WC_GRANT > 0.0) };
+        const { assert!(GUARANTOR_MIN_WC > 0.0) };
+        const { assert!(GUARANTOR_MAX_GUARANTEES > 0) };
+        const { assert!(GUARANTOR_COOLDOWN_DAYS > 0) };
+        const { assert!(BROADCAST_COST_CAP > 0.0) };
+        const { assert!(CRP_CAP_BASE > 0.0) };
+        const { assert!(CRP_CAP_COEFF > 0.0) };
+        const { assert!(PIONEER_NUMERATOR > 0.0) };
     }
 
     #[test]
     fn test_conversion_efficiency_range() {
-        assert!(WC_CONVERSION_EFFICIENCY > 0.0 && WC_CONVERSION_EFFICIENCY < 1.0);
+        const { assert!(WC_CONVERSION_EFFICIENCY > 0.0 && WC_CONVERSION_EFFICIENCY < 1.0) };
     }
 
     #[test]
     fn test_decay_rate_range() {
-        assert!(
-            WC_BALANCE_DECAY_RATE_PER_HOUR > 0.0 && WC_BALANCE_DECAY_RATE_PER_HOUR < 1.0,
-            "Decay rate must be in (0, 1)"
-        );
+        const {
+            assert!(
+                WC_BALANCE_DECAY_RATE_PER_HOUR > 0.0 && WC_BALANCE_DECAY_RATE_PER_HOUR < 1.0,
+                "Decay rate must be in (0, 1)"
+            )
+        };
     }
 }

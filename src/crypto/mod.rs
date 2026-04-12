@@ -487,8 +487,6 @@ mod tests {
             other => panic!("Expected SessionExpired, got: {other}"),
         }
     }
-
-    #[test]
     #[test]
     fn test_decrypt_for_rejects_expired_session() {
         let mut alice = CryptoLayer::new();
@@ -523,30 +521,6 @@ mod tests {
         }
     }
 
-    fn test_is_session_expired_and_remove() {
-        let mut alice = CryptoLayer::new();
-        let bob = CryptoLayer::new();
-
-        let alice_keys = alice.generate_keypair().unwrap();
-        let bob_keys = bob.generate_keypair().unwrap();
-
-        let shared = CryptoLayer::diffie_hellman(
-            alice_keys.private_key(),
-            &bob_keys.public,
-        )
-        .unwrap();
-        alice.create_session("bob", &shared);
-
-        // Fresh session is not expired
-        assert_eq!(alice.is_session_expired("bob"), Some(false));
-        // Non-existent session
-        assert_eq!(alice.is_session_expired("eve"), None);
-
-        // Remove session
-        assert!(alice.remove_session("bob"));
-        assert!(!alice.has_session("bob"));
-        assert!(!alice.remove_session("bob")); // Already removed
-    }
 
     // ── KeyPair security tests ──
 

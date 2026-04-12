@@ -15,12 +15,13 @@ use walkie_talkie_core::protocol::{AgentMessage, MessageProtocol};
 
 /// Helper: create a P2PConfig for testing with a specific listen port.
 fn test_config(port: u16) -> P2PConfig {
-    let mut cfg = P2PConfig::default();
-    cfg.listen_on = vec![format!("/ip4/127.0.0.1/tcp/{port}")];
-    cfg.ping_interval_secs = 2;
-    cfg.ping_timeout_secs = 3;
-    cfg.idle_timeout_secs = 30;
-    cfg
+    P2PConfig {
+        listen_on: vec![format!("/ip4/127.0.0.1/tcp/{port}")],
+        ping_interval_secs: 2,
+        ping_timeout_secs: 3,
+        idle_timeout_secs: 30,
+        ..Default::default()
+    }
 }
 
 /// Helper: build a minimal AgentIdentity for testing.
@@ -69,7 +70,7 @@ async fn spawn_pair(
 
 #[tokio::test]
 async fn test_two_nodes_connect_and_exchange_keys() {
-    let (mut net_a, mut ev_a, addr_a, mut net_b, mut ev_b, addr_b) =
+    let (net_a, mut ev_a, addr_a, net_b, mut ev_b, addr_b) =
         spawn_pair(0, 0).await;
 
     tracing::info!("node_a listening on {}", addr_a);
@@ -94,7 +95,7 @@ async fn test_two_nodes_connect_and_exchange_keys() {
 
 #[tokio::test]
 async fn test_encrypted_message_roundtrip() {
-    let (mut net_a, mut ev_a, addr_a, mut net_b, mut ev_b, addr_b) =
+    let (net_a, mut ev_a, _addr_a, net_b, mut ev_b, addr_b) =
         spawn_pair(0, 0).await;
 
     // A dials B
@@ -123,7 +124,7 @@ async fn test_encrypted_message_roundtrip() {
 
 #[tokio::test]
 async fn test_structured_message_roundtrip() {
-    let (mut net_a, mut ev_a, _addr_a, mut net_b, mut ev_b, addr_b) =
+    let (net_a, mut ev_a, _addr_a, net_b, mut ev_b, addr_b) =
         spawn_pair(0, 0).await;
 
     net_a.dial(&addr_b).await.expect("dial");
@@ -158,7 +159,7 @@ async fn test_structured_message_roundtrip() {
 
 #[tokio::test]
 async fn test_multiple_encrypted_messages() {
-    let (mut net_a, mut ev_a, _addr_a, mut net_b, mut ev_b, addr_b) =
+    let (net_a, mut ev_a, _addr_a, net_b, mut ev_b, addr_b) =
         spawn_pair(0, 0).await;
 
     net_a.dial(&addr_b).await.expect("dial");
@@ -193,7 +194,7 @@ async fn test_multiple_encrypted_messages() {
 
 #[tokio::test]
 async fn test_connection_lifecycle_events() {
-    let (mut net_a, mut ev_a, _addr_a, net_b, _ev_b, addr_b) =
+    let (net_a, mut ev_a, _addr_a, net_b, _ev_b, addr_b) =
         spawn_pair(0, 0).await;
 
     net_a.dial(&addr_b).await.expect("dial");
@@ -218,7 +219,7 @@ async fn test_connection_lifecycle_events() {
 
 #[tokio::test]
 async fn test_broadcast_via_gossipsub() {
-    let (mut net_a, mut ev_a, _addr_a, mut net_b, mut ev_b, addr_b) =
+    let (net_a, mut ev_a, _addr_a, net_b, mut ev_b, addr_b) =
         spawn_pair(0, 0).await;
 
     net_a.dial(&addr_b).await.expect("dial");
