@@ -163,6 +163,25 @@ async fn main() -> Result<(), Box<dyn Error>> {
             P2PEvent::PingFailure { peer_id, error } => {
                 println!("🏓 Ping FAIL {peer_id}: {error}");
             }
+            P2PEvent::DirectMessage { from, request_id, payload } => {
+                println!("📨 Direct #{} from {}: {:?}", request_id, from, payload);
+            }
+            P2PEvent::DirectSendFailed { peer_id, reason } => {
+                println!("❌ Direct send fail {peer_id}: {reason}");
+            }
+            P2PEvent::DirectResponse { from, response } => {
+                println!("📨 Direct response from {}: {:?}", from, response);
+            }
+            P2PEvent::PendingMessagesSent { peer_id, count } => {
+                println!("📤 Flush {} pending to {}", count, peer_id);
+            }
+            P2PEvent::ResourceDeclared { peer_id, advertisement } => {
+                println!("📦 Resource from {peer_id}: agent={}, cpu={:.1}%, mem={}MB",
+                    advertisement.agent_id, advertisement.cpu_offer * 100.0, advertisement.memory_offer_mb);
+            }
+            P2PEvent::ResourceDeclarationRejected { peer_id, reason } => {
+                println!("❌ Resource rejected from {peer_id}: {reason}");
+            }
         }
     }
 

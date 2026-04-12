@@ -1,7 +1,7 @@
 //! Direct channel — point-to-point request-response protocol.
 //!
-//! Messages that must not be broadcast (key exchange, DMs, identity claims)
-//! are routed through this channel instead of Gossipsub.
+//! Messages that must not be broadcast (key exchange, DMs, identity claims,
+//! resource declarations) are routed through this channel instead of Gossipsub.
 
 use futures::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use libp2p::request_response::{self, Codec, ProtocolSupport};
@@ -11,6 +11,8 @@ use std::{
     time::{Duration, Instant},
 };
 use libp2p::PeerId;
+
+use crate::resource::ResourceAdvertisement;
 
 // ── Protocol constants ─────────────────────────────────────────
 
@@ -51,6 +53,10 @@ pub enum DirectPayload {
     Encrypted { ciphertext: Vec<u8> },
     /// Agent identity claim sent inside an established E2EE session.
     IdentityClaim { identity_json: Vec<u8> },
+    /// Resource declaration: node advertises its available resources.
+    ResourceDeclaration {
+        advertisement: ResourceAdvertisement,
+    },
 }
 
 /// Response to a direct request.
@@ -220,6 +226,14 @@ pub fn identity_claim_request(identity_json: Vec<u8>) -> DirectRequest {
     }
 }
 
+/// Shorthand: build a ResourceDeclaration request.
+pub fn resource_declaration_request(ad: ResourceAdvertisement) -> DirectRequest {
+    DirectRequest {
+        request_id: next_request_id(),
+        payload: DirectPayload::ResourceDeclaration { advertisement: ad },
+    }
+}
+
 /// Build a simple OK response mirroring a request_id.
 pub fn ok_response(request_id: u64) -> DirectResponse {
     DirectResponse {
@@ -325,6 +339,27 @@ impl Default for PendingMessageStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::resource::{ResourceSpec, now_ms};
+
+    fn make_test_ad(agent_id: &str) -> ResourceAdvertisement {
+        ResourceAdvertisement {
+            agent_id: agent_id.to_string(),
+            sequence: 1,
+            timestamp: now_ms(),
+            spec: ResourceSpec {
+                cpu_cores: 4,
+                total_memory_mb: 8192,
+                max_bandwidth_up_mbps: 100,
+                total_storage_bytes: 256 * 1024 * 1024 * 1024,
+            },
+            cpu_offer: 0.2,
+            memory_offer_mb: 2048,
+            bandwidth_offer: 5_000_000,
+            storage_offer: 50 * 1024 * 1024 * 1024,
+            features: vec!["always-on".to_string()],
+            signature: Vec::new(),
+        }
+    }
 
     #[test]
     fn test_direct_request_serialization() {
@@ -427,6 +462,9 @@ mod tests {
             DirectPayload::KeyAccept { public_key: vec![2u8; 32] },
             DirectPayload::Encrypted { ciphertext: vec![3u8; 28] },
             DirectPayload::IdentityClaim { identity_json: b"{}".to_vec() },
+            DirectPayload::ResourceDeclaration {
+                advertisement: make_test_ad("did:walkie:test"),
+            },
         ];
 
         for payload in payloads {
@@ -434,6 +472,18 @@ mod tests {
             let json = serde_json::to_vec(&req).unwrap();
             let decoded: DirectRequest = serde_json::from_slice(&json).unwrap();
             assert_eq!(req, decoded);
+        }
+    }
+
+    #[test]
+    fn test_resource_declaration_request() {
+        let ad = make_test_ad("did:walkie:test");
+        let req = resource_declaration_request(ad.clone());
+        match req.payload {
+            DirectPayload::ResourceDeclaration { advertisement } => {
+                assert_eq!(advertisement, ad);
+            }
+            _ => panic!("expected ResourceDeclaration payload"),
         }
     }
 

@@ -20,9 +20,8 @@ pub struct ResourceSpec {
 
 /// A node's resource capability declaration.
 ///
-/// Broadcast via Gossipsub on `/walkie-talkie/resource/1.0.0` (or embedded
-/// in Heartbeat payload for small networks). Contains both static hardware
-/// specs and dynamic resource offers.
+/// Sent via Direct channel on peer connection (P2P integration).
+/// Contains both static hardware specs and dynamic resource offers.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ResourceAdvertisement {
     /// Declarer's DID (did:walkie:...)
@@ -130,7 +129,115 @@ impl ResourceAdvertisement {
         copy.signature.clear();
         serde_json::to_vec(&copy).unwrap_or_default()
     }
+
+    /// Validate this advertisement against spec consistency and economy parameters.
+    ///
+    /// Checks that all offers are within spec limits and fields are sane.
+    /// Economy parameters from `economy_params.rs` inform the validation rules.
+    pub fn validate(&self) -> Result<(), ResourceValidationError> {
+        // 1. Agent ID must be non-empty.
+        if self.agent_id.is_empty() {
+            return Err(ResourceValidationError::EmptyAgentId);
+        }
+
+        // 2. Sequence must be > 0 (bumped from initial 0 before sending).
+        if self.sequence == 0 {
+            return Err(ResourceValidationError::ZeroSequence);
+        }
+
+        // 3. CPU offer must be in [0.0, 1.0].
+        if self.cpu_offer < 0.0 || self.cpu_offer > 1.0 {
+            return Err(ResourceValidationError::CpuOfferOutOfRange(self.cpu_offer));
+        }
+
+        // 4. Memory offer must not exceed spec.
+        if self.memory_offer_mb > self.spec.total_memory_mb {
+            return Err(ResourceValidationError::MemoryOfferExceedsSpec {
+                offered: self.memory_offer_mb,
+                max: self.spec.total_memory_mb,
+            });
+        }
+
+        // 5. Bandwidth offer must not exceed spec (Mbps → bytes/sec).
+        let max_bw_bytes = (self.spec.max_bandwidth_up_mbps as u64)
+            .saturating_mul(125_000); // Mbps × 1_000_000 / 8
+        if self.bandwidth_offer > max_bw_bytes {
+            return Err(ResourceValidationError::BandwidthOfferExceedsSpec {
+                offered: self.bandwidth_offer,
+                max: max_bw_bytes,
+            });
+        }
+
+        // 6. Storage offer must not exceed spec.
+        if self.storage_offer > self.spec.total_storage_bytes {
+            return Err(ResourceValidationError::StorageOfferExceedsSpec {
+                offered: self.storage_offer,
+                max: self.spec.total_storage_bytes,
+            });
+        }
+
+        // 7. Spec sanity: cpu_cores > 0.
+        if self.spec.cpu_cores == 0 {
+            return Err(ResourceValidationError::InvalidSpec {
+                reason: "cpu_cores must be > 0".into(),
+            });
+        }
+
+        // 8. Timestamp should not be more than 5 minutes in the future.
+        let now = now_ms();
+        if self.timestamp > now.saturating_add(300_000) {
+            return Err(ResourceValidationError::FutureTimestamp);
+        }
+
+        Ok(())
+    }
 }
+
+// ── Validation Error ───────────────────────────────────────────
+
+/// Errors that can occur when validating a ResourceAdvertisement.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ResourceValidationError {
+    /// agent_id field is empty.
+    EmptyAgentId,
+    /// cpu_offer is outside [0.0, 1.0].
+    CpuOfferOutOfRange(f32),
+    /// memory_offer_mb exceeds spec.total_memory_mb.
+    MemoryOfferExceedsSpec { offered: u64, max: u64 },
+    /// bandwidth_offer exceeds spec.max_bandwidth_up_mbps (converted to bytes/sec).
+    BandwidthOfferExceedsSpec { offered: u64, max: u64 },
+    /// storage_offer exceeds spec.total_storage_bytes.
+    StorageOfferExceedsSpec { offered: u64, max: u64 },
+    /// ResourceSpec contains invalid values.
+    InvalidSpec { reason: String },
+    /// Timestamp is too far in the future.
+    FutureTimestamp,
+    /// Sequence number is zero (should be bumped before sending).
+    ZeroSequence,
+}
+
+impl std::fmt::Display for ResourceValidationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EmptyAgentId => write!(f, "agent_id is empty"),
+            Self::CpuOfferOutOfRange(v) => write!(f, "cpu_offer {v} out of range [0.0, 1.0]"),
+            Self::MemoryOfferExceedsSpec { offered, max } => {
+                write!(f, "memory_offer {offered}MB exceeds spec {max}MB")
+            }
+            Self::BandwidthOfferExceedsSpec { offered, max } => {
+                write!(f, "bandwidth_offer {offered} B/s exceeds spec {max} B/s")
+            }
+            Self::StorageOfferExceedsSpec { offered, max } => {
+                write!(f, "storage_offer {offered} exceeds spec {max}")
+            }
+            Self::InvalidSpec { reason } => write!(f, "invalid spec: {reason}"),
+            Self::FutureTimestamp => write!(f, "timestamp is too far in the future"),
+            Self::ZeroSequence => write!(f, "sequence must be > 0"),
+        }
+    }
+}
+
+impl std::error::Error for ResourceValidationError {}
 
 /// A resource request from a consumer.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -277,4 +384,161 @@ pub fn now_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_valid_ad() -> ResourceAdvertisement {
+        ResourceAdvertisement {
+            agent_id: "did:walkie:test".to_string(),
+            sequence: 1,
+            timestamp: now_ms(),
+            spec: ResourceSpec {
+                cpu_cores: 4,
+                total_memory_mb: 8192,
+                max_bandwidth_up_mbps: 100,
+                total_storage_bytes: 256 * 1024 * 1024 * 1024,
+            },
+            cpu_offer: 0.2,
+            memory_offer_mb: 2048,
+            bandwidth_offer: 5_000_000,
+            storage_offer: 50 * 1024 * 1024 * 1024,
+            features: vec!["always-on".to_string()],
+            signature: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn test_validate_valid_ad() {
+        let ad = make_valid_ad();
+        assert!(ad.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_empty_agent_id() {
+        let mut ad = make_valid_ad();
+        ad.agent_id = String::new();
+        assert_eq!(
+            ad.validate().unwrap_err(),
+            ResourceValidationError::EmptyAgentId
+        );
+    }
+
+    #[test]
+    fn test_validate_zero_sequence() {
+        let mut ad = make_valid_ad();
+        ad.sequence = 0;
+        assert_eq!(
+            ad.validate().unwrap_err(),
+            ResourceValidationError::ZeroSequence
+        );
+    }
+
+    #[test]
+    fn test_validate_cpu_offer_negative() {
+        let mut ad = make_valid_ad();
+        ad.cpu_offer = -0.1;
+        assert!(matches!(
+            ad.validate().unwrap_err(),
+            ResourceValidationError::CpuOfferOutOfRange(_)
+        ));
+    }
+
+    #[test]
+    fn test_validate_cpu_offer_over_one() {
+        let mut ad = make_valid_ad();
+        ad.cpu_offer = 1.5;
+        assert!(matches!(
+            ad.validate().unwrap_err(),
+            ResourceValidationError::CpuOfferOutOfRange(_)
+        ));
+    }
+
+    #[test]
+    fn test_validate_memory_exceeds_spec() {
+        let mut ad = make_valid_ad();
+        ad.memory_offer_mb = 16_384; // 16GB > 8GB spec
+        assert!(matches!(
+            ad.validate().unwrap_err(),
+            ResourceValidationError::MemoryOfferExceedsSpec { .. }
+        ));
+    }
+
+    #[test]
+    fn test_validate_bandwidth_exceeds_spec() {
+        let mut ad = make_valid_ad();
+        // spec: 100 Mbps = 12,500,000 B/s. Offer more than that.
+        ad.bandwidth_offer = 20_000_000;
+        assert!(matches!(
+            ad.validate().unwrap_err(),
+            ResourceValidationError::BandwidthOfferExceedsSpec { .. }
+        ));
+    }
+
+    #[test]
+    fn test_validate_storage_exceeds_spec() {
+        let mut ad = make_valid_ad();
+        ad.storage_offer = 1_000_000_000_000; // 1TB > 256GB spec
+        assert!(matches!(
+            ad.validate().unwrap_err(),
+            ResourceValidationError::StorageOfferExceedsSpec { .. }
+        ));
+    }
+
+    #[test]
+    fn test_validate_zero_cpu_cores() {
+        let mut ad = make_valid_ad();
+        ad.spec.cpu_cores = 0;
+        assert!(matches!(
+            ad.validate().unwrap_err(),
+            ResourceValidationError::InvalidSpec { .. }
+        ));
+    }
+
+    #[test]
+    fn test_validate_future_timestamp() {
+        let mut ad = make_valid_ad();
+        ad.timestamp = now_ms() + 600_000; // 10 minutes in future
+        assert_eq!(
+            ad.validate().unwrap_err(),
+            ResourceValidationError::FutureTimestamp
+        );
+    }
+
+    #[test]
+    fn test_validate_boundary_cpu_offer() {
+        let mut ad = make_valid_ad();
+        ad.cpu_offer = 0.0;
+        assert!(ad.validate().is_ok());
+
+        ad.cpu_offer = 1.0;
+        assert!(ad.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_boundary_memory_offer() {
+        let mut ad = make_valid_ad();
+        ad.memory_offer_mb = ad.spec.total_memory_mb; // exact match
+        assert!(ad.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_timestamp_within_tolerance() {
+        let mut ad = make_valid_ad();
+        ad.timestamp = now_ms() + 60_000; // 1 minute in future — within 5-min tolerance
+        assert!(ad.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validation_error_display() {
+        assert!(!ResourceValidationError::EmptyAgentId.to_string().is_empty());
+        assert!(!ResourceValidationError::CpuOfferOutOfRange(1.5).to_string().is_empty());
+        assert!(!ResourceValidationError::FutureTimestamp.to_string().is_empty());
+        assert!(!ResourceValidationError::ZeroSequence.to_string().is_empty());
+        assert!(!ResourceValidationError::MemoryOfferExceedsSpec { offered: 100, max: 50 }
+            .to_string()
+            .is_empty());
+    }
 }

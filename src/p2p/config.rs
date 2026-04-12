@@ -2,6 +2,7 @@
 
 use crate::identity::AgentIdentity;
 use crate::protocol::AgentMessage;
+use crate::resource::ResourceAdvertisement;
 use super::direct::DirectRequest;
 
 // ─── Configuration ───────────────────────────────────────────────
@@ -20,6 +21,9 @@ pub struct P2PConfig {
     pub auto_key_exchange: bool,
     /// Our AgentIdentity (signed). If set, broadcast on session established.
     pub agent_identity: Option<AgentIdentity>,
+    /// Our resource advertisement. If set, auto-declare to peers via Direct
+    /// channel after key exchange completes.
+    pub resource_ad: Option<ResourceAdvertisement>,
 }
 
 impl Default for P2PConfig {
@@ -34,6 +38,7 @@ impl Default for P2PConfig {
             ping_timeout_secs: 20,
             auto_key_exchange: true,
             agent_identity: None,
+            resource_ad: None,
         }
     }
 }
@@ -105,12 +110,31 @@ pub(crate) enum P2PCommand {
     ExternalAddresses {
         reply: tokio::sync::oneshot::Sender<Vec<libp2p::Multiaddr>>,
     },
+    /// Send our resource declaration to a specific peer.
+    SendResourceDeclaration {
+        peer_id: libp2p::PeerId,
+        reply: tokio::sync::oneshot::Sender<anyhow::Result<()>>,
+    },
+    /// Update our resource advertisement and broadcast to all connected peers.
+    UpdateResourceAd {
+        ad: ResourceAdvertisement,
+        reply: tokio::sync::oneshot::Sender<anyhow::Result<()>>,
+    },
+    /// Get all known resource advertisements from the local table.
+    ListResources {
+        reply: tokio::sync::oneshot::Sender<Vec<ResourceAdvertisement>>,
+    },
+    /// Run maintenance tick on the ContributionEngine (evict expired ads, sessions).
+    ResourceTick {
+        reply: tokio::sync::oneshot::Sender<crate::resource::MaintenanceReport>,
+    },
     Shutdown,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::resource::{ResourceSpec, now_ms};
 
     #[test]
     fn test_default_config() {
@@ -118,5 +142,33 @@ mod tests {
         assert!(config.enable_mdns);
         assert!(config.auto_key_exchange);
         assert_eq!(config.listen_on.len(), 1);
+        assert!(config.resource_ad.is_none());
+    }
+
+    #[test]
+    fn test_config_with_resource_ad() {
+        let ad = ResourceAdvertisement {
+            agent_id: "did:walkie:test".to_string(),
+            sequence: 1,
+            timestamp: now_ms(),
+            spec: ResourceSpec {
+                cpu_cores: 4,
+                total_memory_mb: 8192,
+                max_bandwidth_up_mbps: 100,
+                total_storage_bytes: 0,
+            },
+            cpu_offer: 0.2,
+            memory_offer_mb: 2048,
+            bandwidth_offer: 0,
+            storage_offer: 0,
+            features: vec![],
+            signature: vec![],
+        };
+        let config = P2PConfig {
+            resource_ad: Some(ad.clone()),
+            ..P2PConfig::default()
+        };
+        assert!(config.resource_ad.is_some());
+        assert_eq!(config.resource_ad.as_ref().unwrap().agent_id, "did:walkie:test");
     }
 }

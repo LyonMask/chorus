@@ -11,6 +11,7 @@ use tokio::sync::{mpsc, oneshot};
 use futures::StreamExt;
 
 use crate::crypto::CryptoLayer;
+use crate::resource::{ContributionEngine, MaintenanceReport};
 
 use super::behaviour::WalkieBehaviour;
 use super::config::{P2PCommand, P2PConfig};
@@ -125,11 +126,28 @@ impl P2PNetwork {
         let auto_kx = config.auto_key_exchange;
         let agent_identity = config.agent_identity.clone();
 
+        // Extract resource_ad before moving config
+        let resource_ad = config.resource_ad;
+
         // ── Swarm event loop ──
         tokio::spawn(async move {
             let mut crypto = crypto;
             let pending_store = PendingMessageStore::new();
             let mut mdns_peer_addrs: HashMap<PeerId, Vec<Multiaddr>> = HashMap::new();
+
+            // ContributionEngine: created from resource_ad if provided.
+            let mut resource_engine = match &resource_ad {
+                Some(ad) => {
+                    let mut engine = ContributionEngine::new(ad.agent_id.clone());
+                    engine.declare_resources(ad.clone());
+                    tracing::info!(target: "resource", "📦 ContributionEngine initialised for '{}'", ad.agent_id);
+                    Some(engine)
+                }
+                None => {
+                    tracing::debug!(target: "resource", "📦 no resource_ad configured, ContributionEngine not active");
+                    None
+                }
+            };
 
             loop {
                 tokio::select! {
@@ -219,7 +237,7 @@ impl P2PNetwork {
                                 ),
                             ) => { tracing::debug!(target: "p2p", "{peer_id} unsubscribed {topic}"); }
 
-                            // ── Direct channel (P0-3) ──
+                            // ── Direct channel (P0-3 + resource declarations) ──
                             libp2p::swarm::SwarmEvent::Behaviour(
                                 super::WalkieBehaviourEvent::Direct(
                                     request_response::Event::Message {
@@ -230,9 +248,17 @@ impl P2PNetwork {
                                 ),
                             ) => {
                                 tracing::trace!(target: "p2p", "📨 direct request from {peer}: request_id={}", request.request_id);
+
+                                // We always need a ContributionEngine for the handler,
+                                // even if resource_ad was not configured (engine is a no-op).
+                                let engine_ref = resource_engine.get_or_insert_with(|| {
+                                    ContributionEngine::new(String::new())
+                                });
+
                                 let response = handler::handle_direct_request(
                                     peer, request, &mut crypto, &my_keys,
                                     &mut swarm, &event_tx, &agent_identity,
+                                    engine_ref,
                                 );
                                 let _ = swarm.behaviour_mut().direct.send_response(channel, response);
                             }
@@ -463,6 +489,86 @@ impl P2PNetwork {
                                 let addrs: Vec<Multiaddr> = swarm.external_addresses().cloned().collect();
                                 let _ = reply.send(addrs);
                             }
+
+                            // ── Resource commands (P2P integration) ──
+
+                            // Send our ResourceDeclaration to a specific peer via Direct channel.
+                            Some(P2PCommand::SendResourceDeclaration { peer_id: target, reply }) => {
+                                let result = (|| -> anyhow::Result<()> {
+                                    let engine = resource_engine.as_ref()
+                                        .ok_or_else(|| anyhow::anyhow!("no resource_ad configured"))?;
+                                    if let Some(ref ad) = engine.my_ad {
+                                        let request = direct::resource_declaration_request(ad.clone());
+                                        if swarm.is_connected(&target) {
+                                            swarm.behaviour_mut().direct.send_request(&target, request);
+                                        } else {
+                                            if !pending_store.store(target, request) {
+                                                return Err(anyhow::anyhow!("pending queue full for {target}"));
+                                            }
+                                        }
+                                    } else {
+                                        return Err(anyhow::anyhow!("no resource_ad set in engine"));
+                                    }
+                                    Ok(())
+                                })();
+                                let _ = reply.send(result);
+                            }
+
+                            // Update our ResourceAdvertisement and broadcast to all connected peers.
+                            Some(P2PCommand::UpdateResourceAd { ad, reply }) => {
+                                let result = (|| -> anyhow::Result<()> {
+                                    // Validate the ad before accepting it.
+                                    ad.validate()
+                                        .map_err(|e| anyhow::anyhow!("invalid resource ad: {e}"))?;
+
+                                    let engine = resource_engine.get_or_insert_with(|| {
+                                        ContributionEngine::new(ad.agent_id.clone())
+                                    });
+                                    let declared = engine.declare_resources(ad.clone());
+
+                                    // Broadcast to all connected peers.
+                                    let peers: Vec<PeerId> = swarm.connected_peers().copied().collect();
+                                    let request = direct::resource_declaration_request(declared);
+                                    for peer in &peers {
+                                        if peer == &our_peer_id { continue; }
+                                        if swarm.is_connected(peer) {
+                                            swarm.behaviour_mut().direct.send_request(peer, request.clone());
+                                        }
+                                    }
+                                    tracing::info!(target: "resource", "📦 updated ResourceDeclaration, broadcast to {} peers", peers.len());
+                                    Ok(())
+                                })();
+                                let _ = reply.send(result);
+                            }
+
+                            // Get all known resource advertisements from the local table.
+                            Some(P2PCommand::ListResources { reply }) => {
+                                let ads = if let Some(ref engine) = resource_engine {
+                                    engine.table.entries()
+                                } else {
+                                    Vec::new()
+                                };
+                                let _ = reply.send(ads);
+                            }
+
+                            // Run maintenance tick on the ContributionEngine.
+                            Some(P2PCommand::ResourceTick { reply }) => {
+                                let report = if let Some(ref mut engine) = resource_engine {
+                                    engine.tick()
+                                } else {
+                                    MaintenanceReport {
+                                        ads_evicted: 0,
+                                        sessions_expired: 0,
+                                        offers_expired: 0,
+                                        total_provided: 0,
+                                        total_consumed: 0,
+                                        active_sessions: 0,
+                                        pending_sessions: 0,
+                                    }
+                                };
+                                let _ = reply.send(report);
+                            }
+
                             Some(P2PCommand::Shutdown) | None => {
                                 tracing::info!(target: "p2p", "swarm shutdown");
                                 break;
@@ -546,6 +652,52 @@ impl P2PNetwork {
     pub async fn external_addresses(&self) -> anyhow::Result<Vec<Multiaddr>> {
         let (reply, rx) = oneshot::channel();
         self.cmd_tx.send(P2PCommand::ExternalAddresses { reply })?;
+        Ok(rx.await?)
+    }
+
+    // ── Resource API (P2P integration) ──
+
+    /// Send our ResourceDeclaration to a specific peer via Direct channel.
+    ///
+    /// If peer is offline, the declaration is queued for delivery on reconnect.
+    /// Requires a `resource_ad` to be configured in `P2PConfig`.
+    pub async fn send_resource_declaration(&self, peer_id: PeerId) -> anyhow::Result<()> {
+        let (reply, rx) = oneshot::channel();
+        self.cmd_tx.send(P2PCommand::SendResourceDeclaration { peer_id, reply })?;
+        rx.await?
+    }
+
+    /// Update our resource advertisement and broadcast to all connected peers.
+    ///
+    /// The advertisement is validated before acceptance. If valid, it is
+    /// stored in the ContributionEngine and sent to all connected peers via
+    /// Direct channel.
+    pub async fn update_resource_ad(
+        &self,
+        ad: crate::resource::ResourceAdvertisement,
+    ) -> anyhow::Result<()> {
+        let (reply, rx) = oneshot::channel();
+        self.cmd_tx.send(P2PCommand::UpdateResourceAd { ad, reply })?;
+        rx.await?
+    }
+
+    /// Get all known resource advertisements from the local resource table.
+    ///
+    /// Returns ads received from other nodes via Direct channel. Empty if
+    /// no resource_ad was configured (ContributionEngine not active).
+    pub async fn list_resources(&self) -> anyhow::Result<Vec<crate::resource::ResourceAdvertisement>> {
+        let (reply, rx) = oneshot::channel();
+        self.cmd_tx.send(P2PCommand::ListResources { reply })?;
+        Ok(rx.await?)
+    }
+
+    /// Run a maintenance tick on the ContributionEngine.
+    ///
+    /// Evicts expired advertisements and timed-out sessions. Should be
+    /// called periodically (e.g., every 60 seconds).
+    pub async fn resource_tick(&self) -> anyhow::Result<MaintenanceReport> {
+        let (reply, rx) = oneshot::channel();
+        self.cmd_tx.send(P2PCommand::ResourceTick { reply })?;
         Ok(rx.await?)
     }
 

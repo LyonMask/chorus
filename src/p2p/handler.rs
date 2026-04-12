@@ -1,4 +1,5 @@
-//! Crypto envelope handler — key exchange, decryption, identity verification.
+//! Crypto envelope handler — key exchange, decryption, identity verification,
+//! resource declaration processing.
 //!
 //! Functions here run inside the swarm event loop. They are `pub(crate)` so
 //! that `network.rs` can call them directly.
@@ -9,6 +10,7 @@ use tokio::sync::mpsc;
 use crate::crypto::{CryptoLayer, KeyPair};
 use crate::identity::AgentIdentity;
 use crate::protocol::AgentMessage;
+use crate::resource::ContributionEngine;
 
 use super::behaviour::WalkieBehaviour;
 use super::direct::{self, DirectPayload, DirectRequest, DirectResponse, DirectResponseStatus};
@@ -43,10 +45,25 @@ pub(crate) fn send_key_accept(
     tracing::info!(target: "crypto", "🔑 sent KeyAccept to {peer_id} (direct)");
 }
 
+/// Send our ResourceDeclaration to a peer via Direct channel.
+pub(crate) fn send_resource_declaration(
+    swarm: &mut Swarm<WalkieBehaviour>,
+    engine: &ContributionEngine,
+    peer_id: &PeerId,
+) {
+    if let Some(ref ad) = engine.my_ad {
+        let request = direct::resource_declaration_request(ad.clone());
+        swarm.behaviour_mut().direct.send_request(peer_id, request);
+        tracing::info!(target: "resource", "📦 sent ResourceDeclaration to {peer_id} (direct)");
+    }
+}
+
 /// Handle an incoming direct channel request.
 ///
 /// Dispatches KeyOffer/KeyAccept → E2EE session, Encrypted → decrypt,
-/// IdentityClaim → verify. Returns a response for the response channel.
+/// IdentityClaim → verify, ResourceDeclaration → validate & store.
+/// Returns a response for the response channel.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn handle_direct_request(
     from: PeerId,
     request: DirectRequest,
@@ -55,6 +72,7 @@ pub(crate) fn handle_direct_request(
     swarm: &mut Swarm<WalkieBehaviour>,
     event_tx: &mpsc::UnboundedSender<P2PEvent>,
     agent_identity: &Option<AgentIdentity>,
+    resource_engine: &mut ContributionEngine,
 ) -> DirectResponse {
     let peer_str = from.to_string();
     let request_id = request.request_id;
@@ -80,6 +98,9 @@ pub(crate) fn handle_direct_request(
 
                     // Send KeyAccept back
                     send_key_accept(swarm, my_keys, &from);
+
+                    // Send our resource declaration after key exchange
+                    send_resource_declaration(swarm, resource_engine, &from);
                 }
                 Err(e) => {
                     tracing::error!(target: "crypto", "DH failed with {from}: {e}");
@@ -98,6 +119,9 @@ pub(crate) fn handle_direct_request(
                     crypto.create_session(&peer_str, &shared);
                     tracing::info!(target: "crypto", "🔒 session with {from} {}", if already { "refreshed" } else { "established" });
                     let _ = event_tx.send(P2PEvent::SessionEstablished { peer_id: from });
+
+                    // Send our resource declaration after session established
+                    send_resource_declaration(swarm, resource_engine, &from);
                 }
                 Err(e) => {
                     tracing::error!(target: "crypto", "DH failed with {from}: {e}");
@@ -158,13 +182,82 @@ pub(crate) fn handle_direct_request(
                 }
             }
         }
+
+        DirectPayload::ResourceDeclaration { advertisement } => {
+            handle_resource_declaration(from, advertisement, request_id, event_tx, resource_engine)
+        }
     }
+}
+
+// ── Resource declaration handler ──────────────────────────────
+
+/// Handle an incoming resource declaration from a peer.
+///
+/// Validates the advertisement against spec consistency and economy params,
+/// then stores it in the local ContributionEngine's ResourceTable.
+pub(crate) fn handle_resource_declaration(
+    from: PeerId,
+    advertisement: crate::resource::ResourceAdvertisement,
+    request_id: u64,
+    event_tx: &mpsc::UnboundedSender<P2PEvent>,
+    engine: &mut ContributionEngine,
+) -> DirectResponse {
+    tracing::info!(
+        target: "resource",
+        "📦 ResourceDeclaration from {from}: agent={}, seq={}, cpu={:.1}%, mem={}MB",
+        advertisement.agent_id,
+        advertisement.sequence,
+        advertisement.cpu_offer * 100.0,
+        advertisement.memory_offer_mb,
+    );
+
+    // Validate the advertisement.
+    if let Err(e) = advertisement.validate() {
+        tracing::warn!(target: "resource", "📦 ResourceDeclaration from {from} rejected: {e}");
+        let _ = event_tx.send(P2PEvent::ResourceDeclarationRejected {
+            peer_id: from,
+            reason: e.clone(),
+        });
+        return DirectResponse {
+            request_id,
+            status: DirectResponseStatus::Error(format!("validation: {e}")),
+        };
+    }
+
+    // Store in resource table.
+    let updated = engine.on_resource_ad(advertisement.clone());
+
+    if updated {
+        tracing::info!(
+            target: "resource",
+            "📦 stored ResourceDeclaration from {from}: agent={}",
+            advertisement.agent_id,
+        );
+        let _ = event_tx.send(P2PEvent::ResourceDeclared {
+            peer_id: from,
+            advertisement,
+        });
+    } else {
+        tracing::debug!(
+            target: "resource",
+            "📦 ResourceDeclaration from {from} stale (old seq or same agent_id)",
+        );
+        // Still emit the event so upper layers know we received it,
+        // even if the table didn't update (stale seq).
+        let _ = event_tx.send(P2PEvent::ResourceDeclared {
+            peer_id: from,
+            advertisement,
+        });
+    }
+
+    direct::ok_response(request_id)
 }
 
 // ── Legacy Gossipsub handler (kept for BroadcastStructured & backward compat) ─
 
 /// Handle a CryptoEnvelope received via Gossipsub.
 /// Only used for broadcast messages. Point-to-point messages arrive via Direct channel.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn handle_crypto_envelope(
     from: PeerId,
     envelope: CryptoEnvelope,

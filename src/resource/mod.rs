@@ -5,6 +5,7 @@
 //! - ResourceTable: local cache of all known node resources
 //! - ResourceSession: lifecycle of a resource allocation
 //! - ContributionRecord: contribution measurement
+//! - EconomyParams: frozen v1.1 economic parameters (20 constants)
 //!
 //! Key design decisions (per 驚羽 review):
 //! - ResourceSpec sub-struct for hardware specs (驚羽意見1)
@@ -18,6 +19,7 @@ mod session;
 mod proof;
 mod backoff;
 mod engine;
+pub mod economy_params;
 
 pub use types::*;
 pub use table::ResourceTable;

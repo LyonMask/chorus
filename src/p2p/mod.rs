@@ -1,10 +1,13 @@
-//! P2P Network Module — Walkie Talkie Core (Phase P0-3: Direct Channel)
+//! P2P Network Module — Walkie Talkie Core (Phase P0-3: Direct Channel + P2P Resource Integration)
 //!
 //! Gossipsub + mDNS + Identify + Ping + **Direct Channel** + built-in CryptoLayer.
 //!
 //! Key exchange and point-to-point messages go through the Direct channel
 //! (libp2p request-response protocol). Gossipsub is retained for broadcast
 //! only (heartbeat, presence, group messages).
+//!
+//! Resource declarations are exchanged via Direct channel (not Gossipsub)
+//! after E2EE session establishment.
 
 pub mod behaviour;
 pub mod config;

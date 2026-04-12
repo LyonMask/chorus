@@ -113,6 +113,11 @@ impl ResourceTable {
         self.entries.is_empty()
     }
 
+    /// Return all stored advertisements as a Vec.
+    pub fn entries(&self) -> Vec<ResourceAdvertisement> {
+        self.entries.values().map(|(ad, _)| ad.clone()).collect()
+    }
+
     /// Compute a suitability score for a given ad/request pair.
     ///
     /// Higher score = better fit. Based on how much headroom the node
@@ -122,8 +127,6 @@ impl ResourceTable {
         let mem_headroom = (ad.memory_offer_mb as f64) - (req.min_memory_mb as f64);
         let bw_headroom = (ad.bandwidth_offer as f64) - (req.min_bandwidth as f64);
         let stor_headroom = (ad.storage_offer as f64) - (req.min_storage as f64);
-
-        // Weighted sum: CPU and memory are more important for compute tasks.
         cpu_headroom * 4.0 + mem_headroom * 2.0 + bw_headroom * 1.0 + stor_headroom * 1.0
     }
 }
@@ -321,5 +324,23 @@ mod tests {
             ad2.features.iter().filter(|f| *f == "always-on").count(),
             1
         );
+    }
+
+    #[test]
+    fn test_entries_returns_all() {
+        let mut table = ResourceTable::new();
+        table.update(make_ad("a", 1, 0.1, 512));
+        table.update(make_ad("b", 2, 0.5, 4096));
+
+        let entries = table.entries();
+        assert_eq!(entries.len(), 2);
+        assert!(entries.iter().any(|a| a.agent_id == "a"));
+        assert!(entries.iter().any(|a| a.agent_id == "b"));
+    }
+
+    #[test]
+    fn test_entries_empty_table() {
+        let table = ResourceTable::new();
+        assert!(table.entries().is_empty());
     }
 }

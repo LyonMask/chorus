@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use crate::identity::AgentIdentity;
 use crate::protocol::AgentMessage;
+use crate::resource::{ResourceAdvertisement, ResourceValidationError};
 
 use super::direct::{DirectPayload, DirectResponse};
 
@@ -104,6 +105,18 @@ pub enum P2PEvent {
     PendingMessagesSent {
         peer_id: PeerId,
         count: usize,
+    },
+    /// ── Resource declaration events (P2P integration) ──
+
+    /// Received and validated a resource declaration from a peer.
+    ResourceDeclared {
+        peer_id: PeerId,
+        advertisement: ResourceAdvertisement,
+    },
+    /// A resource declaration from a peer failed validation.
+    ResourceDeclarationRejected {
+        peer_id: PeerId,
+        reason: ResourceValidationError,
     },
 }
 
