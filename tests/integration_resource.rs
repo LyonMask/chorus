@@ -1,0 +1,470 @@
+//! Integration tests for resource request flow (Phase 3).
+//!
+//! Scenarios:
+//! 1. Three-node mesh: resource discovery via declaration broadcast
+//! 2. Resource request → offer flow (consumer + provider)
+//! 3. Resource request with no matching provider → error
+//! 4. Disconnect / reconnect with pending resource request
+//!
+//! All tests use port 0 (OS-assigned) to avoid conflicts.
+
+use std::time::Duration;
+use tokio::sync::mpsc;
+use walkie_talkie_core::p2p::{
+    direct::DirectResponseStatus, P2PConfig, P2PEvent, P2PNetwork,
+};
+use walkie_talkie_core::resource::{ResourceAdvertisement, ResourceOffer, ResourceRequest, ResourceSpec};
+
+/// Helper: create a P2PConfig for testing.
+fn test_config(port: u16) -> P2PConfig {
+    P2PConfig {
+        listen_on: vec![format!("/ip4/127.0.0.1/tcp/{port}")],
+        ping_interval_secs: 2,
+        ping_timeout_secs: 3,
+        idle_timeout_secs: 30,
+        ..Default::default()
+    }
+}
+
+/// Helper: build a ResourceAdvertisement for a provider node.
+fn test_ad(agent_id: &str, cpu: f32, mem_mb: u64) -> ResourceAdvertisement {
+    let mut ad = ResourceAdvertisement::new(
+        agent_id.to_string(),
+        ResourceSpec {
+            cpu_cores: 4,
+            total_memory_mb: 8192,
+            max_bandwidth_up_mbps: 100,
+            total_storage_bytes: 512_000_000_000,
+        },
+    );
+    ad.cpu_offer = cpu;
+    ad.memory_offer_mb = mem_mb;
+    ad.sequence = 1;
+    ad
+}
+
+/// Spawn a single node and wait for its listen address.
+async fn spawn_node() -> (P2PNetwork, mpsc::UnboundedReceiver<P2PEvent>, String) {
+    let (net, mut ev) = P2PNetwork::new(test_config(0)).expect("spawn node");
+    let event = wait_for_event(&mut ev, |e| matches!(e, P2PEvent::Listening { .. }), Duration::from_secs(3)).await;
+    let addr = match event {
+        P2PEvent::Listening { address } => address.to_string(),
+        _ => panic!("expected Listening event"),
+    };
+    (net, ev, addr)
+}
+
+/// Wait for both sides to establish E2EE session.
+async fn wait_for_session(
+    ev_a: &mut mpsc::UnboundedReceiver<P2PEvent>,
+    ev_b: &mut mpsc::UnboundedReceiver<P2PEvent>,
+    timeout: Duration,
+) {
+    let mut a_ok = false;
+    let mut b_ok = false;
+    let deadline = tokio::time::Instant::now() + timeout;
+
+    while !a_ok || !b_ok {
+        if deadline.elapsed() > timeout {
+            panic!("timeout waiting for session: a={a_ok}, b={b_ok}");
+        }
+        tokio::select! {
+            event = ev_a.recv() => {
+                if let Some(P2PEvent::SessionEstablished { .. }) = event {
+                    a_ok = true;
+                }
+            }
+            event = ev_b.recv() => {
+                if let Some(P2PEvent::SessionEstablished { .. }) = event {
+                    b_ok = true;
+                }
+            }
+        }
+    }
+}
+
+/// Wait for a specific event, with timeout.
+async fn wait_for_event<F>(
+    rx: &mut mpsc::UnboundedReceiver<P2PEvent>,
+    predicate: F,
+    timeout: Duration,
+) -> P2PEvent
+where
+    F: Fn(&P2PEvent) -> bool,
+{
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let remaining = timeout.saturating_sub(deadline.elapsed());
+        if remaining.is_zero() {
+            panic!("timeout waiting for event");
+        }
+        match tokio::time::timeout(remaining, rx.recv()).await {
+            Ok(Some(event)) if predicate(&event) => return event,
+            Ok(Some(_)) => continue,
+            Ok(None) => panic!("event channel closed"),
+            Err(_) => panic!("timeout waiting for event"),
+        }
+    }
+}
+
+/// Drain all events matching a predicate within a timeout window.
+async fn drain_events<F>(
+    rx: &mut mpsc::UnboundedReceiver<P2PEvent>,
+    predicate: F,
+    timeout: Duration,
+) -> Vec<P2PEvent>
+where
+    F: Fn(&P2PEvent) -> bool,
+{
+    let deadline = tokio::time::Instant::now() + timeout;
+    let mut collected = Vec::new();
+
+    loop {
+        let remaining = timeout.saturating_sub(deadline.elapsed());
+        if remaining.is_zero() {
+            break;
+        }
+        match tokio::time::timeout(remaining, rx.recv()).await {
+            Ok(Some(event)) if predicate(&event) => {
+                collected.push(event);
+            }
+            Ok(Some(_)) => continue,
+            Ok(None) | Err(_) => break,
+        }
+    }
+    collected
+}
+
+/// Wait for the next DirectResponse and return it. Skips Ok responses
+/// (from key exchange etc.) and returns the first Error response.
+async fn wait_for_error_response(
+    rx: &mut mpsc::UnboundedReceiver<P2PEvent>,
+    from_peer: &libp2p::PeerId,
+    timeout: Duration,
+) -> P2PEvent {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let remaining = timeout.saturating_sub(deadline.elapsed());
+        if remaining.is_zero() {
+            panic!("timeout waiting for error response from {from_peer}");
+        }
+        match tokio::time::timeout(remaining, rx.recv()).await {
+            Ok(Some(P2PEvent::DirectResponse { from, response })) if from == *from_peer => {
+                match &response.status {
+                    DirectResponseStatus::Ok => continue, // skip key-exchange ACK
+                    DirectResponseStatus::Error(_) | DirectResponseStatus::Busy => {
+                        return P2PEvent::DirectResponse { from, response };
+                    }
+                }
+            }
+            Ok(Some(_)) => continue,
+            Ok(None) => panic!("event channel closed"),
+            Err(_) => panic!("timeout waiting for error response"),
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Test 1: Three-node mesh — resource discovery
+// ═══════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn test_three_node_mesh() {
+    let (net_a, mut ev_a, addr_a) = spawn_node().await;
+    let (net_b, mut ev_b, addr_b) = spawn_node().await;
+    let (net_c, mut ev_c, addr_c) = spawn_node().await;
+
+    tracing::info!("A={}, B={}, C={}", addr_a, addr_b, addr_c);
+
+    // B dials A, C dials A
+    net_b.dial(&addr_a).await.expect("B dials A");
+    net_c.dial(&addr_a).await.expect("C dials A");
+
+    // Wait for E2EE sessions: A↔B and A↔C
+    wait_for_session(&mut ev_a, &mut ev_b, Duration::from_secs(8)).await;
+    wait_for_session(&mut ev_a, &mut ev_c, Duration::from_secs(8)).await;
+
+    tracing::info!("A↔B and A↔C sessions established");
+
+    // B and C declare resources
+    let ad_b = test_ad("node-b", 0.5, 4096);
+    let ad_c = test_ad("node-c", 0.3, 2048);
+
+    net_b.update_resource_ad(ad_b).await.expect("B update ad");
+    net_c.update_resource_ad(ad_c).await.expect("C update ad");
+
+    // Give A time to receive the declarations
+    let _ = drain_events(
+        &mut ev_a,
+        |e| matches!(e, P2PEvent::ResourceDeclared { .. }),
+        Duration::from_secs(5),
+    )
+    .await;
+
+    // A should list B and C's resources
+    let resources = net_a.list_resources().await.expect("A list resources");
+    let agent_ids: Vec<&str> = resources.iter().map(|r| r.agent_id.as_str()).collect();
+
+    assert!(
+        agent_ids.contains(&"node-b"),
+        "expected node-b in A's resource list, got: {agent_ids:?}"
+    );
+    assert!(
+        agent_ids.contains(&"node-c"),
+        "expected node-c in A's resource list, got: {agent_ids:?}"
+    );
+
+    tracing::info!("✅ A sees {} resource ads: {:?}", resources.len(), agent_ids);
+
+    net_a.shutdown().ok();
+    net_b.shutdown().ok();
+    net_c.shutdown().ok();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Test 2: Resource request → offer flow
+// ═══════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn test_resource_request_flow() {
+    // A = consumer, B = provider
+    let (net_a, mut ev_a, addr_a) = spawn_node().await;
+    let (net_b, mut ev_b, _addr_b) = spawn_node().await;
+
+    // B configures resource ad (CPU 0.5, Memory 4096MB)
+    let ad_b = test_ad("provider-b", 0.5, 4096);
+    net_b.update_resource_ad(ad_b).await.expect("B update ad");
+
+    // B dials A
+    net_b.dial(&addr_a).await.expect("B dials A");
+    wait_for_session(&mut ev_a, &mut ev_b, Duration::from_secs(8)).await;
+
+    let peer_b_id = *net_b.local_peer_id();
+    tracing::info!("B→A session established, peer_b={peer_b_id}");
+
+    // A sends ResourceRequest to B (fire-and-forget)
+    let request = ResourceRequest {
+        consumer_id: "consumer-a".to_string(),
+        min_cpu: 0.3,
+        min_memory_mb: 2048,
+        min_bandwidth: 0,
+        min_storage: 0,
+        required_features: Vec::new(),
+        duration_ms: 60_000,
+        priority: 75,
+    };
+
+    let _ = net_a.request_resource(peer_b_id, request).await;
+
+    // B should emit ResourceOfferSent (provider side)
+    let _offer_sent = wait_for_event(
+        &mut ev_b,
+        |e| matches!(e, P2PEvent::ResourceOfferSent { .. }),
+        Duration::from_secs(5),
+    )
+    .await;
+
+    // A receives the offer via DirectResponse (offer JSON in Error field).
+    // Skip Ok responses (key exchange ACKs) and wait for the Error response.
+    let response_event = wait_for_error_response(&mut ev_a, &peer_b_id, Duration::from_secs(10)).await;
+
+    if let P2PEvent::DirectResponse { response, .. } = &response_event {
+        let err_str = match &response.status {
+            DirectResponseStatus::Error(s) => s.clone(),
+            DirectResponseStatus::Busy => "busy".to_string(),
+            DirectResponseStatus::Ok => unreachable!(),
+        };
+
+        let offer: ResourceOffer = serde_json::from_str(&err_str)
+            .unwrap_or_else(|_| panic!("should parse ResourceOffer from Error field, got: {err_str}"));
+
+        assert_eq!(offer.provider_id, "provider-b");
+        assert_eq!(offer.consumer_id, "consumer-a");
+        assert!(offer.cpu_amount >= 0.3);
+        assert!(offer.memory_amount_mb >= 2048);
+        assert!(offer.expires_at > 0);
+
+        tracing::info!(
+            "✅ A received offer from B: cpu={:.1}, mem={}MB, expires={}",
+            offer.cpu_amount, offer.memory_amount_mb, offer.expires_at
+        );
+    }
+
+    net_a.shutdown().ok();
+    net_b.shutdown().ok();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Test 3: Resource request with no matching provider
+// ═══════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn test_resource_request_no_match() {
+    // A = consumer, B = no resources configured
+    let (net_a, mut ev_a, addr_a) = spawn_node().await;
+    let (net_b, mut ev_b, _addr_b) = spawn_node().await;
+
+    // B does NOT configure resource_ad
+
+    // B dials A
+    net_b.dial(&addr_a).await.expect("B dials A");
+    wait_for_session(&mut ev_a, &mut ev_b, Duration::from_secs(8)).await;
+
+    let peer_b_id = *net_b.local_peer_id();
+
+    // A sends ResourceRequest to B (requires CPU 0.5)
+    let request = ResourceRequest {
+        consumer_id: "consumer-a".to_string(),
+        min_cpu: 0.5,
+        min_memory_mb: 4096,
+        min_bandwidth: 0,
+        min_storage: 0,
+        required_features: Vec::new(),
+        duration_ms: 60_000,
+        priority: 75,
+    };
+
+    let _ = net_a.request_resource(peer_b_id, request).await;
+
+    // B should emit ResourceRequestFailed (provider side — no resources)
+    let failed_event = wait_for_event(
+        &mut ev_b,
+        |e| matches!(e, P2PEvent::ResourceRequestFailed { .. }),
+        Duration::from_secs(5),
+    )
+    .await;
+
+    match &failed_event {
+        P2PEvent::ResourceRequestFailed { peer_id, reason } => {
+            assert_eq!(*peer_id, *net_a.local_peer_id());
+            assert!(
+                reason.contains("no resources available"),
+                "expected 'no resources available', got: {reason}"
+            );
+            tracing::info!("✅ B correctly rejected: {reason}");
+        }
+        _ => panic!("expected ResourceRequestFailed on provider side"),
+    }
+
+    // A should receive DirectResponse with Error("no resources available")
+    let response_event = wait_for_error_response(&mut ev_a, &peer_b_id, Duration::from_secs(10)).await;
+
+    if let P2PEvent::DirectResponse { response, .. } = &response_event {
+        let err_str = match &response.status {
+            DirectResponseStatus::Error(s) => s.clone(),
+            _ => panic!("expected Error response, got {:?}", response.status),
+        };
+        assert!(
+            err_str.contains("no resources available"),
+            "expected 'no resources available', got: {err_str}"
+        );
+        tracing::info!("✅ A received error: {err_str}");
+    }
+
+    net_a.shutdown().ok();
+    net_b.shutdown().ok();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Test 4: Disconnect / reconnect — resource request after reconnection
+// ═══════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn test_disconnect_reconnect_resource_request() {
+    // A = consumer, B = provider
+    let (net_a, mut ev_a, addr_a) = spawn_node().await;
+    let (net_b, mut _ev_b, _addr_b) = spawn_node().await;
+
+    // B configures resources
+    let ad_b = test_ad("provider-b", 0.5, 4096);
+    net_b.update_resource_ad(ad_b).await.expect("B update ad");
+
+    // B dials A, establish session
+    net_b.dial(&addr_a).await.expect("B dials A");
+    wait_for_session(&mut ev_a, &mut _ev_b, Duration::from_secs(8)).await;
+
+    let _peer_b_id = *net_b.local_peer_id();
+    tracing::info!("B→A session established");
+
+    // B disconnects
+    net_b.shutdown().ok();
+
+    // Wait for A to see the disconnect
+    let _ = wait_for_event(
+        &mut ev_a,
+        |e| matches!(e, P2PEvent::PeerDisconnected { .. }),
+        Duration::from_secs(5),
+    )
+    .await;
+
+    tracing::info!("B disconnected");
+
+    // A tries request_resource while B is offline → should fail
+    let request = ResourceRequest {
+        consumer_id: "consumer-a".to_string(),
+        min_cpu: 0.3,
+        min_memory_mb: 2048,
+        min_bandwidth: 0,
+        min_storage: 0,
+        required_features: Vec::new(),
+        duration_ms: 60_000,
+        priority: 75,
+    };
+
+    let result = net_a.request_resource(_peer_b_id, request.clone()).await;
+    assert!(result.is_err());
+    let err_msg = format!("{:#}", result.unwrap_err());
+    assert!(
+        err_msg.contains("not connected"),
+        "expected 'not connected' error, got: {err_msg}"
+    );
+    tracing::info!("✅ A correctly got 'not connected' error");
+
+    // Re-spawn B and reconnect
+    let (net_b2, mut ev_b2, _addr_b2) = spawn_node().await;
+    let ad_b2 = test_ad("provider-b", 0.5, 4096);
+    net_b2.update_resource_ad(ad_b2).await.expect("B2 update ad");
+
+    net_b2.dial(&addr_a).await.expect("B2 dials A");
+    wait_for_session(&mut ev_a, &mut ev_b2, Duration::from_secs(8)).await;
+
+    let peer_b2_id = *net_b2.local_peer_id();
+    tracing::info!("B2 reconnected, peer_id={peer_b2_id}");
+
+    // A sends request to B2
+    let _ = net_a.request_resource(peer_b2_id, request).await;
+
+    // B2 should emit ResourceOfferSent
+    let _offer_sent = wait_for_event(
+        &mut ev_b2,
+        |e| matches!(e, P2PEvent::ResourceOfferSent { .. }),
+        Duration::from_secs(5),
+    )
+    .await;
+
+    // A receives offer via DirectResponse
+    let response_event = wait_for_error_response(&mut ev_a, &peer_b2_id, Duration::from_secs(10)).await;
+
+    if let P2PEvent::DirectResponse { response, .. } = &response_event {
+        let err_str = match &response.status {
+            DirectResponseStatus::Error(s) => s.clone(),
+            _ => panic!("expected Error response, got {:?}", response.status),
+        };
+
+        let offer: ResourceOffer = serde_json::from_str(&err_str)
+            .unwrap_or_else(|_| panic!("should parse ResourceOffer, got: {err_str}"));
+
+        assert!(offer.cpu_amount >= 0.3);
+        assert!(offer.memory_amount_mb >= 2048);
+        tracing::info!(
+            "✅ A received offer from B2: cpu={:.1}, mem={}MB",
+            offer.cpu_amount, offer.memory_amount_mb
+        );
+    }
+
+    // TODO: Test pending queue drain — requires request_resource() to have
+    // pending fallback like send_encrypted(). Tracked as future enhancement.
+
+    net_a.shutdown().ok();
+    net_b2.shutdown().ok();
+}
