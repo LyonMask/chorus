@@ -11,7 +11,7 @@ use tokio::sync::{mpsc, oneshot};
 use futures::StreamExt;
 
 use crate::crypto::CryptoLayer;
-use crate::resource::{ContributionEngine, MaintenanceReport};
+use crate::resource::{ContributionEngine, MaintenanceReport, ResourceOffer};
 
 use super::behaviour::WalkieBehaviour;
 use super::config::{P2PCommand, P2PConfig};
@@ -569,6 +569,19 @@ impl P2PNetwork {
                                 let _ = reply.send(report);
                             }
 
+                            Some(P2PCommand::RequestResource { peer_id: target, request, reply }) => {
+                                let result = (|| -> anyhow::Result<ResourceOffer> {
+                                    let req = direct::resource_request_request(request);
+                                    if swarm.is_connected(&target) {
+                                        swarm.behaviour_mut().direct.send_request(&target, req);
+                                        anyhow::bail!("request sent; wait for ResourceOfferReceived event")
+                                    } else {
+                                        anyhow::bail!("peer {target} not connected")
+                                    }
+                                })();
+                                let _ = reply.send(result);
+                            }
+
                             Some(P2PCommand::Shutdown) | None => {
                                 tracing::info!(target: "p2p", "swarm shutdown");
                                 break;
@@ -699,6 +712,21 @@ impl P2PNetwork {
         let (reply, rx) = oneshot::channel();
         self.cmd_tx.send(P2PCommand::ResourceTick { reply })?;
         Ok(rx.await?)
+    }
+
+
+    /// Request resources from a specific peer via Direct channel.
+    ///
+    /// Sends a ResourceRequest and waits for the provider's ResourceOffer.
+    /// Returns the offer on success, or an error if no provider is available.
+    pub async fn request_resource(
+        &self,
+        peer_id: PeerId,
+        request: crate::resource::ResourceRequest,
+    ) -> anyhow::Result<crate::resource::ResourceOffer> {
+        let (reply, rx) = oneshot::channel();
+        self.cmd_tx.send(P2PCommand::RequestResource { peer_id, request, reply })?;
+        rx.await?
     }
 
     pub fn shutdown(&self) -> anyhow::Result<()> {

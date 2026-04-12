@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use crate::identity::AgentIdentity;
 use crate::protocol::AgentMessage;
-use crate::resource::{ResourceAdvertisement, ResourceValidationError};
+use crate::resource::{ResourceAdvertisement, ResourceOffer, ResourceValidationError};
 
 use super::direct::{DirectPayload, DirectResponse};
 
@@ -117,6 +117,36 @@ pub enum P2PEvent {
     ResourceDeclarationRejected {
         peer_id: PeerId,
         reason: ResourceValidationError,
+    },
+
+    /// ── Resource request flow events (Phase 3) ──
+
+    /// We sent a resource offer to a peer.
+    ResourceOfferSent {
+        peer_id: PeerId,
+        session_id: String,
+    },
+    /// Received a resource offer from a provider.
+    ResourceOfferReceived {
+        peer_id: PeerId,
+        offer: ResourceOffer,
+    },
+    /// A resource session has been started.
+    ResourceSessionStarted {
+        peer_id: PeerId,
+        session_id: String,
+        expires_at: u64,
+    },
+    /// A resource session has been released with contribution delta.
+    ResourceReleased {
+        peer_id: PeerId,
+        session_id: String,
+        contribution_delta: f64,
+    },
+    /// A resource request failed (no matching provider).
+    ResourceRequestFailed {
+        peer_id: PeerId,
+        reason: String,
     },
 }
 

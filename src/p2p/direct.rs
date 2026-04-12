@@ -12,7 +12,7 @@ use std::{
 };
 use libp2p::PeerId;
 
-use crate::resource::ResourceAdvertisement;
+use crate::resource::{ResourceAdvertisement, ResourceRequest, ResourceOffer, WorkReceipt};
 
 // ── Protocol constants ─────────────────────────────────────────
 
@@ -57,8 +57,19 @@ pub enum DirectPayload {
     ResourceDeclaration {
         advertisement: ResourceAdvertisement,
     },
+    /// Consumer requests resources from provider.
+    ResourceRequest { request: ResourceRequest },
+    /// Provider responds with an offer (or rejection).
+    ResourceOffer { offer: ResourceOffer },
+    /// Consumer accepts an offer.
+    ResourceAccept { session_id: String },
+    /// Provider confirms session activated.
+    ResourceSessionActivated { session_id: String, expires_at: u64 },
+    /// Consumer releases resources, sends WorkReceipt.
+    ResourceRelease { receipt: WorkReceipt },
+    /// Provider acknowledges release.
+    ResourceReleaseAck { session_id: String, contribution_delta: f64 },
 }
-
 /// Response to a direct request.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct DirectResponse {
@@ -234,6 +245,39 @@ pub fn resource_declaration_request(ad: ResourceAdvertisement) -> DirectRequest 
     }
 }
 
+
+/// Shorthand: build a ResourceRequest.
+pub fn resource_request_request(request: ResourceRequest) -> DirectRequest {
+    DirectRequest {
+        request_id: next_request_id(),
+        payload: DirectPayload::ResourceRequest { request },
+    }
+}
+
+/// Shorthand: build a ResourceOffer.
+pub fn resource_offer_request(offer: ResourceOffer) -> DirectRequest {
+    DirectRequest {
+        request_id: next_request_id(),
+        payload: DirectPayload::ResourceOffer { offer },
+    }
+}
+
+/// Shorthand: build a ResourceAccept.
+pub fn resource_accept_request(session_id: String) -> DirectRequest {
+    DirectRequest {
+        request_id: next_request_id(),
+        payload: DirectPayload::ResourceAccept { session_id },
+    }
+}
+
+/// Shorthand: build a ResourceRelease.
+pub fn resource_release_request(receipt: WorkReceipt) -> DirectRequest {
+    DirectRequest {
+        request_id: next_request_id(),
+        payload: DirectPayload::ResourceRelease { receipt },
+    }
+}
+
 /// Build a simple OK response mirroring a request_id.
 pub fn ok_response(request_id: u64) -> DirectResponse {
     DirectResponse {
@@ -339,7 +383,7 @@ impl Default for PendingMessageStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::resource::{ResourceSpec, now_ms};
+    use crate::resource::{ResourceSpec, ResourceRequest, ResourceOffer, WorkReceipt, now_ms};
 
     fn make_test_ad(agent_id: &str) -> ResourceAdvertisement {
         ResourceAdvertisement {
@@ -465,6 +509,28 @@ mod tests {
             DirectPayload::ResourceDeclaration {
                 advertisement: make_test_ad("did:walkie:test"),
             },
+
+            DirectPayload::ResourceRequest {
+                request: ResourceRequest::new("consumer".into()),
+            },
+            DirectPayload::ResourceOffer {
+                offer: ResourceOffer {
+                    provider_id: "provider".into(),
+                    consumer_id: "consumer".into(),
+                    cpu_amount: 0.2,
+                    memory_amount_mb: 1024,
+                    bandwidth_amount: 0,
+                    storage_amount: 0,
+                    expires_at: now_ms() + 60_000,
+                    signature: Vec::new(),
+                },
+            },
+            DirectPayload::ResourceAccept { session_id: "sess-1".into() },
+            DirectPayload::ResourceSessionActivated { session_id: "sess-1".into(), expires_at: now_ms() + 60_000 },
+            DirectPayload::ResourceRelease {
+                receipt: WorkReceipt::new("c".into(), "p".into(), "s1".into(), 1000, 1024, 5000),
+            },
+            DirectPayload::ResourceReleaseAck { session_id: "s1".into(), contribution_delta: 1.5 },
         ];
 
         for payload in payloads {

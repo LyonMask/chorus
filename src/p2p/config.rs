@@ -2,7 +2,7 @@
 
 use crate::identity::AgentIdentity;
 use crate::protocol::AgentMessage;
-use crate::resource::ResourceAdvertisement;
+use crate::resource::{ResourceAdvertisement, ResourceRequest, ResourceOffer};
 use super::direct::DirectRequest;
 
 // ─── Configuration ───────────────────────────────────────────────
@@ -128,7 +128,13 @@ pub(crate) enum P2PCommand {
     ResourceTick {
         reply: tokio::sync::oneshot::Sender<crate::resource::MaintenanceReport>,
     },
-    Shutdown,
+    /// Request resources from a peer.
+    RequestResource {
+        peer_id: libp2p::PeerId,
+        request: ResourceRequest,
+        reply: tokio::sync::oneshot::Sender<anyhow::Result<ResourceOffer>>,
+    },
+        Shutdown,
 }
 
 #[cfg(test)]

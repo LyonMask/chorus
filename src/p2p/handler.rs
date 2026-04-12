@@ -1,8 +1,15 @@
 //! Crypto envelope handler — key exchange, decryption, identity verification,
-//! resource declaration processing.
+//! resource declaration and request processing.
 //!
 //! Functions here run inside the swarm event loop. They are `pub(crate)` so
 //! that `network.rs` can call them directly.
+//!
+//! ## Architecture (refactored)
+//!
+//! Both the Direct channel handler and the legacy Gossipsub handler share:
+//! - `establish_session()` — DH + session creation
+//! - `process_decrypted_payload()` — identity/structured/raw dispatch
+//! - `verify_identity_claim()` — identity parse + verify
 
 use libp2p::{gossipsub, swarm::Swarm, PeerId};
 use tokio::sync::mpsc;
@@ -10,7 +17,10 @@ use tokio::sync::mpsc;
 use crate::crypto::{CryptoLayer, KeyPair};
 use crate::identity::AgentIdentity;
 use crate::protocol::AgentMessage;
-use crate::resource::ContributionEngine;
+use crate::resource::{
+    ContributionEngine, ResourceOffer, ResourceRequest, WorkReceipt,
+};
+use crate::resource::now_ms;
 
 use super::behaviour::WalkieBehaviour;
 use super::direct::{self, DirectPayload, DirectRequest, DirectResponse, DirectResponseStatus};
@@ -21,7 +31,98 @@ fn wt_topic() -> gossipsub::IdentTopic {
     gossipsub::IdentTopic::new(WT_TOPIC)
 }
 
-// ── Direct channel handlers (P0-3) ────────────────────────────
+// ═══════════════════════════════════════════════════════════════
+// Shared helper functions — used by both Direct & Gossipsub
+// ═══════════════════════════════════════════════════════════════
+
+/// Perform X25519 DH and create/update an E2EE session for a peer.
+///
+/// Returns `Ok(())` on success, `Err(reason)` on DH failure.
+/// Emits `SessionEstablished` or `SessionFailed` events.
+fn establish_session(
+    peer_id: PeerId,
+    public_key: &[u8],
+    crypto: &mut CryptoLayer,
+    my_keys: &KeyPair,
+    event_tx: &mpsc::UnboundedSender<P2PEvent>,
+) -> Result<(), String> {
+    match CryptoLayer::diffie_hellman(my_keys.private_key(), public_key) {
+        Ok(shared) => {
+            let peer_str = peer_id.to_string();
+            let already = crypto.has_session(&peer_str);
+            crypto.create_session(&peer_str, &shared);
+            tracing::info!(
+                target: "crypto",
+                "🔒 session with {peer_id} {}",
+                if already { "refreshed" } else { "created" },
+            );
+            let _ = event_tx.send(P2PEvent::SessionEstablished { peer_id });
+            Ok(())
+        }
+        Err(e) => {
+            tracing::error!(target: "crypto", "DH failed with {peer_id}: {e}");
+            let _ = event_tx.send(P2PEvent::SessionFailed {
+                peer_id,
+                reason: format!("DH failed: {e}"),
+            });
+            Err(format!("DH failed: {e}"))
+        }
+    }
+}
+
+/// Dispatch a decrypted plaintext payload to the appropriate P2P event.
+///
+/// Tries to parse as `AgentIdentity`, then `AgentMessage`, then falls back
+/// to raw `EncryptedMessage`.
+fn process_decrypted_payload(
+    from: PeerId,
+    plaintext: Vec<u8>,
+    channel: &str,
+    event_tx: &mpsc::UnboundedSender<P2PEvent>,
+) {
+    tracing::trace!(target: "crypto", "🔓 decrypted {} bytes from {from} ({channel})", plaintext.len());
+
+    if let Ok(identity) = serde_json::from_slice::<AgentIdentity>(&plaintext) {
+        match identity.verify() {
+            Ok(()) => {
+                tracing::info!(target: "identity", "🪪 verified agent '{}' from {from}", identity.display_name);
+                let _ = event_tx.send(P2PEvent::AgentIdentified { peer_id: from, identity });
+            }
+            Err(e) => {
+                tracing::warn!(target: "identity", "🪪 identity verification failed from {from}: {e}");
+                let _ = event_tx.send(P2PEvent::IdentityVerificationFailed {
+                    peer_id: from,
+                    reason: e.to_string(),
+                });
+            }
+        }
+    } else if let Ok(agent_msg) = serde_json::from_slice::<AgentMessage>(&plaintext) {
+        tracing::info!(
+            target: "protocol",
+            "📋 structured [{}] from {}",
+            agent_msg.protocol.tag(),
+            agent_msg.from_agent.display_name,
+        );
+        let _ = event_tx.send(P2PEvent::StructuredMessage { from, message: agent_msg });
+    } else {
+        let _ = event_tx.send(P2PEvent::EncryptedMessage { from, plaintext });
+    }
+}
+
+/// Parse and verify an `AgentIdentity` from raw JSON bytes.
+///
+/// Returns `Ok(identity)` on success, `Err(reason)` on parse or verify failure.
+fn verify_identity_claim(identity_json: &[u8]) -> Result<AgentIdentity, String> {
+    let identity: AgentIdentity =
+        serde_json::from_slice(identity_json).map_err(|e| format!("invalid identity JSON: {e}"))?;
+    identity.verify().map_err(|e| format!("identity verification: {e}"))?;
+    tracing::info!(target: "identity", "🪪 verified agent '{}'", identity.display_name);
+    Ok(identity)
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Direct channel send helpers (P0-3)
+// ═══════════════════════════════════════════════════════════════
 
 /// Send a KeyOffer to a peer via the **Direct channel** (not Gossipsub).
 pub(crate) fn send_key_offer(
@@ -58,10 +159,24 @@ pub(crate) fn send_resource_declaration(
     }
 }
 
+// ═══════════════════════════════════════════════════════════════
+// Direct channel request handler
+// ═══════════════════════════════════════════════════════════════
+
 /// Handle an incoming direct channel request.
 ///
-/// Dispatches KeyOffer/KeyAccept → E2EE session, Encrypted → decrypt,
-/// IdentityClaim → verify, ResourceDeclaration → validate & store.
+/// Dispatches:
+/// - KeyOffer/KeyAccept → E2EE session (via `establish_session`)
+/// - Encrypted → decrypt → dispatch (via `process_decrypted_payload`)
+/// - IdentityClaim → verify (via `verify_identity_claim`)
+/// - ResourceDeclaration → validate & store
+/// - ResourceRequest → match & offer
+/// - ResourceOffer → accept
+/// - ResourceAccept → activate session
+/// - ResourceSessionActivated → record
+/// - ResourceRelease → validate & record
+/// - ResourceReleaseAck → acknowledge
+///
 /// Returns a response for the response channel.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn handle_direct_request(
@@ -78,118 +193,343 @@ pub(crate) fn handle_direct_request(
     let request_id = request.request_id;
 
     match request.payload {
+        // ── Key exchange ──
+
         DirectPayload::KeyOffer { public_key } => {
             tracing::info!(target: "crypto", "🔑 KeyOffer from {from} (direct)");
-            match CryptoLayer::diffie_hellman(my_keys.private_key(), &public_key) {
-                Ok(shared) => {
-                    let already = crypto.has_session(&peer_str);
-                    crypto.create_session(&peer_str, &shared);
-                    tracing::info!(target: "crypto", "🔒 session with {from} {}", if already { "refreshed" } else { "created" });
-                    let _ = event_tx.send(P2PEvent::SessionEstablished { peer_id: from });
+            if let Err(reason) = establish_session(from, &public_key, crypto, my_keys, event_tx) {
+                return DirectResponse { request_id, status: DirectResponseStatus::Error(reason) };
+            }
 
-                    // Send our AgentIdentity if configured
-                    if let Some(ref our_identity) = agent_identity {
-                        if let Ok(id_json) = serde_json::to_vec(our_identity) {
-                            let claim_req = direct::identity_claim_request(id_json);
-                            let _ = swarm.behaviour_mut().direct.send_request(&from, claim_req);
-                            tracing::info!(target: "identity", "🪪 sent our identity to {from} (direct)");
-                        }
-                    }
-
-                    // Send KeyAccept back
-                    send_key_accept(swarm, my_keys, &from);
-
-                    // Send our resource declaration after key exchange
-                    send_resource_declaration(swarm, resource_engine, &from);
-                }
-                Err(e) => {
-                    tracing::error!(target: "crypto", "DH failed with {from}: {e}");
-                    let _ = event_tx.send(P2PEvent::SessionFailed { peer_id: from, reason: format!("DH failed: {e}") });
-                    return DirectResponse { request_id, status: DirectResponseStatus::Error(format!("DH failed: {e}")) };
+            // Send our AgentIdentity if configured
+            if let Some(ref our_identity) = agent_identity {
+                if let Ok(id_json) = serde_json::to_vec(our_identity) {
+                    let claim_req = direct::identity_claim_request(id_json);
+                    let _ = swarm.behaviour_mut().direct.send_request(&from, claim_req);
+                    tracing::info!(target: "identity", "🪪 sent our identity to {from} (direct)");
                 }
             }
+
+            send_key_accept(swarm, my_keys, &from);
+            send_resource_declaration(swarm, resource_engine, &from);
             direct::ok_response(request_id)
         }
 
         DirectPayload::KeyAccept { public_key } => {
             tracing::info!(target: "crypto", "🔑 KeyAccept from {from} (direct)");
-            match CryptoLayer::diffie_hellman(my_keys.private_key(), &public_key) {
-                Ok(shared) => {
-                    let already = crypto.has_session(&peer_str);
-                    crypto.create_session(&peer_str, &shared);
-                    tracing::info!(target: "crypto", "🔒 session with {from} {}", if already { "refreshed" } else { "established" });
-                    let _ = event_tx.send(P2PEvent::SessionEstablished { peer_id: from });
-
-                    // Send our resource declaration after session established
-                    send_resource_declaration(swarm, resource_engine, &from);
-                }
-                Err(e) => {
-                    tracing::error!(target: "crypto", "DH failed with {from}: {e}");
-                    let _ = event_tx.send(P2PEvent::SessionFailed { peer_id: from, reason: format!("DH failed: {e}") });
-                    return DirectResponse { request_id, status: DirectResponseStatus::Error(format!("DH failed: {e}")) };
-                }
+            if let Err(reason) = establish_session(from, &public_key, crypto, my_keys, event_tx) {
+                return DirectResponse { request_id, status: DirectResponseStatus::Error(reason) };
             }
+            send_resource_declaration(swarm, resource_engine, &from);
             direct::ok_response(request_id)
         }
+
+        // ── Encrypted payload ──
 
         DirectPayload::Encrypted { ciphertext } => {
             match crypto.decrypt_from(&peer_str, &ciphertext) {
                 Ok(plaintext) => {
-                    tracing::trace!(target: "crypto", "🔓 decrypted {} bytes from {from} (direct)", plaintext.len());
-                    if let Ok(identity) = serde_json::from_slice::<AgentIdentity>(&plaintext) {
-                        match identity.verify() {
-                            Ok(()) => {
-                                tracing::info!(target: "identity", "🪪 verified agent '{}' from {from}", identity.display_name);
-                                let _ = event_tx.send(P2PEvent::AgentIdentified { peer_id: from, identity });
-                            }
-                            Err(e) => {
-                                tracing::warn!(target: "identity", "🪪 identity verification failed from {from}: {e}");
-                                let _ = event_tx.send(P2PEvent::IdentityVerificationFailed { peer_id: from, reason: e.to_string() });
-                            }
-                        }
-                    } else if let Ok(agent_msg) = serde_json::from_slice::<AgentMessage>(&plaintext) {
-                        tracing::info!(target: "protocol", "📋 structured [{}] from {}", agent_msg.protocol.tag(), agent_msg.from_agent.display_name);
-                        let _ = event_tx.send(P2PEvent::StructuredMessage { from, message: agent_msg });
-                    } else {
-                        let _ = event_tx.send(P2PEvent::EncryptedMessage { from, plaintext });
-                    }
+                    process_decrypted_payload(from, plaintext, "direct", event_tx);
                     direct::ok_response(request_id)
                 }
                 Err(e) => {
                     tracing::warn!(target: "crypto", "🔓 decrypt failed from {from}: {e}");
-                    let _ = event_tx.send(P2PEvent::SessionFailed { peer_id: from, reason: format!("decrypt: {e}") });
-                    DirectResponse { request_id, status: DirectResponseStatus::Error(format!("decrypt failed: {e}")) }
+                    let _ = event_tx.send(P2PEvent::SessionFailed {
+                        peer_id: from,
+                        reason: format!("decrypt: {e}"),
+                    });
+                    DirectResponse {
+                        request_id,
+                        status: DirectResponseStatus::Error(format!("decrypt failed: {e}")),
+                    }
                 }
             }
         }
 
+        // ── Identity claim ──
+
         DirectPayload::IdentityClaim { identity_json } => {
-            match serde_json::from_slice::<AgentIdentity>(&identity_json) {
-                Ok(identity) => match identity.verify() {
-                    Ok(()) => {
-                        tracing::info!(target: "identity", "🪪 verified agent '{}' from {from}", identity.display_name);
-                        let _ = event_tx.send(P2PEvent::AgentIdentified { peer_id: from, identity });
-                        direct::ok_response(request_id)
-                    }
-                    Err(e) => {
-                        tracing::warn!(target: "identity", "🪪 identity verification failed from {from}: {e}");
-                        DirectResponse { request_id, status: DirectResponseStatus::Error(format!("identity verification: {e}")) }
-                    }
-                },
-                Err(e) => {
-                    tracing::warn!(target: "identity", "🪪 invalid identity JSON from {from}: {e}");
-                    DirectResponse { request_id, status: DirectResponseStatus::Error(format!("invalid identity JSON: {e}")) }
+            match verify_identity_claim(&identity_json) {
+                Ok(identity) => {
+                    let _ = event_tx.send(P2PEvent::AgentIdentified { peer_id: from, identity });
+                    direct::ok_response(request_id)
+                }
+                Err(reason) => {
+                    tracing::warn!(target: "identity", "🪪 {reason} from {from}");
+                    DirectResponse { request_id, status: DirectResponseStatus::Error(reason) }
                 }
             }
         }
+
+        // ── Resource declaration ──
 
         DirectPayload::ResourceDeclaration { advertisement } => {
             handle_resource_declaration(from, advertisement, request_id, event_tx, resource_engine)
         }
+
+        // ── Resource request flow (Phase 3) ──
+
+        DirectPayload::ResourceRequest { request } => {
+            handle_resource_request(from, request, request_id, event_tx, resource_engine)
+        }
+
+        DirectPayload::ResourceOffer { offer } => {
+            handle_resource_offer_incoming(from, offer, request_id, event_tx)
+        }
+
+        DirectPayload::ResourceAccept { session_id } => {
+            handle_resource_accept(from, session_id, request_id, event_tx, resource_engine)
+        }
+
+        DirectPayload::ResourceSessionActivated { session_id, expires_at } => {
+            handle_resource_session_activated(from, session_id, expires_at, request_id, event_tx)
+        }
+
+        DirectPayload::ResourceRelease { receipt } => {
+            handle_resource_release(from, receipt, request_id, event_tx, resource_engine)
+        }
+
+        DirectPayload::ResourceReleaseAck { session_id, contribution_delta } => {
+            tracing::info!(
+                target: "resource",
+                "👋 ResourceReleaseAck from {from}: session={session_id}, delta={contribution_delta:.4}",
+            );
+            let _ = event_tx.send(P2PEvent::ResourceReleased {
+                peer_id: from,
+                session_id,
+                contribution_delta,
+            });
+            direct::ok_response(request_id)
+        }
     }
 }
 
-// ── Resource declaration handler ──────────────────────────────
+// ═══════════════════════════════════════════════════════════════
+// Resource request flow handlers (Phase 3)
+// ═══════════════════════════════════════════════════════════════
+
+/// Provider side: handle a ResourceRequest from a consumer.
+///
+/// Checks if our advertisement satisfies the request. If so, creates a
+/// pending session and returns an offer. Otherwise returns an error.
+pub(crate) fn handle_resource_request(
+    from: PeerId,
+    request: ResourceRequest,
+    request_id: u64,
+    event_tx: &mpsc::UnboundedSender<P2PEvent>,
+    engine: &mut ContributionEngine,
+) -> DirectResponse {
+    tracing::info!(
+        target: "resource",
+        "📦 ResourceRequest from {from}: consumer={}, cpu={:.1}, mem={}MB",
+        request.consumer_id,
+        request.min_cpu,
+        request.min_memory_mb,
+    );
+
+    // Check if our ad satisfies the request
+    let offer = if let Some(ref ad) = engine.my_ad {
+        if !ad.satisfies(&request) {
+            tracing::warn!(target: "resource", "📦 request not satisfied by our ad");
+            let _ = event_tx.send(P2PEvent::ResourceRequestFailed {
+                peer_id: from,
+                reason: "no matching resources".into(),
+            });
+            return DirectResponse {
+                request_id,
+                status: DirectResponseStatus::Error("no matching resources".into()),
+            };
+        }
+
+        let _session_id = engine.sessions.create_session(
+            request.consumer_id.clone(),
+            engine.agent_id.clone(),
+            request.min_cpu,
+            request.min_memory_mb,
+            request.duration_ms,
+        );
+        let expires_at = now_ms() + request.duration_ms;
+
+        ResourceOffer {
+            provider_id: engine.agent_id.clone(),
+            consumer_id: request.consumer_id.clone(),
+            cpu_amount: ad.cpu_offer.min(request.min_cpu),
+            memory_amount_mb: ad.memory_offer_mb.min(request.min_memory_mb),
+            bandwidth_amount: ad.bandwidth_offer.min(request.min_bandwidth),
+            storage_amount: ad.storage_offer.min(request.min_storage),
+            expires_at,
+            signature: Vec::new(),
+        }
+    } else {
+        tracing::warn!(target: "resource", "📦 no resource ad configured");
+        let _ = event_tx.send(P2PEvent::ResourceRequestFailed {
+            peer_id: from,
+            reason: "no resources available".into(),
+        });
+        return DirectResponse {
+            request_id,
+            status: DirectResponseStatus::Error("no resources available".into()),
+        };
+    };
+
+    tracing::info!(
+        target: "resource",
+        "📦 sent ResourceOffer to {from}: cpu={:.1}, mem={}MB",
+        offer.cpu_amount,
+        offer.memory_amount_mb,
+    );
+
+    let _ = event_tx.send(P2PEvent::ResourceOfferSent {
+        peer_id: from,
+        session_id: offer.provider_id.clone(),
+    });
+
+    // Encode offer in response status (workaround: DirectResponse doesn't carry data payloads)
+    let offer_json = serde_json::to_vec(&offer).unwrap_or_default();
+    DirectResponse {
+        request_id,
+        status: DirectResponseStatus::Error(String::from_utf8_lossy(&offer_json).into()),
+    }
+}
+
+/// Consumer side: handle a ResourceOffer from a provider.
+pub(crate) fn handle_resource_offer_incoming(
+    from: PeerId,
+    offer: ResourceOffer,
+    request_id: u64,
+    event_tx: &mpsc::UnboundedSender<P2PEvent>,
+) -> DirectResponse {
+    tracing::info!(
+        target: "resource",
+        "📦 ResourceOffer from {from}: provider={}, cpu={:.1}, mem={}MB",
+        offer.provider_id,
+        offer.cpu_amount,
+        offer.memory_amount_mb,
+    );
+
+    let _ = event_tx.send(P2PEvent::ResourceOfferReceived {
+        peer_id: from,
+        offer: offer.clone(),
+    });
+
+    direct::ok_response(request_id)
+}
+
+/// Provider side: handle a ResourceAccept from a consumer.
+///
+/// Activates the pending session and emits `ResourceSessionStarted`.
+pub(crate) fn handle_resource_accept(
+    from: PeerId,
+    _session_id: String,
+    request_id: u64,
+    event_tx: &mpsc::UnboundedSender<P2PEvent>,
+    engine: &mut ContributionEngine,
+) -> DirectResponse {
+    tracing::info!(target: "resource", "✅ ResourceAccept from {from}: session={_session_id}");
+
+    let pending = engine.sessions.list_by_status(crate::resource::SessionStatus::Pending);
+    let mut found_sid = String::new();
+    let mut expires_at = 0u64;
+
+    for session in pending {
+        if session.consumer == from.to_string() {
+            found_sid = session.session_id.clone();
+            expires_at = session.ends_at;
+            break;
+        }
+    }
+
+    if found_sid.is_empty() {
+        tracing::warn!(target: "resource", "✅ no pending session found for {from}");
+        return DirectResponse {
+            request_id,
+            status: DirectResponseStatus::Error("no pending session".into()),
+        };
+    }
+
+    if !engine.accept_session(&found_sid) {
+        tracing::warn!(target: "resource", "✅ failed to activate session {found_sid}");
+        return DirectResponse {
+            request_id,
+            status: DirectResponseStatus::Error("failed to activate session".into()),
+        };
+    }
+
+    let _ = event_tx.send(P2PEvent::ResourceSessionStarted {
+        peer_id: from,
+        session_id: found_sid.clone(),
+        expires_at,
+    });
+
+    direct::ok_response(request_id)
+}
+
+/// Consumer side: handle a ResourceSessionActivated from the provider.
+pub(crate) fn handle_resource_session_activated(
+    from: PeerId,
+    session_id: String,
+    expires_at: u64,
+    request_id: u64,
+    event_tx: &mpsc::UnboundedSender<P2PEvent>,
+) -> DirectResponse {
+    tracing::info!(
+        target: "resource",
+        "✅ ResourceSessionActivated from {from}: session={session_id}, expires_at={expires_at}",
+    );
+
+    let _ = event_tx.send(P2PEvent::ResourceSessionStarted {
+        peer_id: from,
+        session_id,
+        expires_at,
+    });
+
+    direct::ok_response(request_id)
+}
+
+/// Provider side: handle a ResourceRelease with WorkReceipt.
+///
+/// Validates, records consumption, releases the session.
+pub(crate) fn handle_resource_release(
+    from: PeerId,
+    receipt: WorkReceipt,
+    request_id: u64,
+    event_tx: &mpsc::UnboundedSender<P2PEvent>,
+    engine: &mut ContributionEngine,
+) -> DirectResponse {
+    tracing::info!(
+        target: "resource",
+        "👋 ResourceRelease from {from}: session={}, cpu_ms={}, duration_ms={}",
+        receipt.session_id,
+        receipt.cpu_used_ms,
+        receipt.duration_ms,
+    );
+
+    let contribution_delta =
+        if let Some(_provider_receipt) = engine.release_and_prove(&receipt.session_id) {
+            let delta = receipt.cpu_used_ms as f64 / 3_600_000.0;
+            tracing::info!(target: "resource", "👋 contribution_delta={delta:.4}");
+            engine.record_consumption(&receipt);
+            delta
+        } else {
+            tracing::warn!(target: "resource", "👋 no active session found for {}", receipt.session_id);
+            return DirectResponse {
+                request_id,
+                status: DirectResponseStatus::Error("no active session".into()),
+            };
+        };
+
+    let _ = event_tx.send(P2PEvent::ResourceReleased {
+        peer_id: from,
+        session_id: receipt.session_id.clone(),
+        contribution_delta,
+    });
+
+    direct::ok_response(request_id)
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Resource declaration handler
+// ═══════════════════════════════════════════════════════════════
 
 /// Handle an incoming resource declaration from a peer.
 ///
@@ -211,7 +551,6 @@ pub(crate) fn handle_resource_declaration(
         advertisement.memory_offer_mb,
     );
 
-    // Validate the advertisement.
     if let Err(e) = advertisement.validate() {
         tracing::warn!(target: "resource", "📦 ResourceDeclaration from {from} rejected: {e}");
         let _ = event_tx.send(P2PEvent::ResourceDeclarationRejected {
@@ -224,39 +563,25 @@ pub(crate) fn handle_resource_declaration(
         };
     }
 
-    // Store in resource table.
-    let updated = engine.on_resource_ad(advertisement.clone());
+    let _ = engine.on_resource_ad(advertisement.clone());
 
-    if updated {
-        tracing::info!(
-            target: "resource",
-            "📦 stored ResourceDeclaration from {from}: agent={}",
-            advertisement.agent_id,
-        );
-        let _ = event_tx.send(P2PEvent::ResourceDeclared {
-            peer_id: from,
-            advertisement,
-        });
-    } else {
-        tracing::debug!(
-            target: "resource",
-            "📦 ResourceDeclaration from {from} stale (old seq or same agent_id)",
-        );
-        // Still emit the event so upper layers know we received it,
-        // even if the table didn't update (stale seq).
-        let _ = event_tx.send(P2PEvent::ResourceDeclared {
-            peer_id: from,
-            advertisement,
-        });
-    }
+    let _ = event_tx.send(P2PEvent::ResourceDeclared {
+        peer_id: from,
+        advertisement,
+    });
 
     direct::ok_response(request_id)
 }
 
-// ── Legacy Gossipsub handler (kept for BroadcastStructured & backward compat) ─
+// ═══════════════════════════════════════════════════════════════
+// Legacy Gossipsub handler (kept for BroadcastStructured & backward compat)
+// ═══════════════════════════════════════════════════════════════
 
 /// Handle a CryptoEnvelope received via Gossipsub.
+///
 /// Only used for broadcast messages. Point-to-point messages arrive via Direct channel.
+/// Key exchange and encrypted payload handling delegates to the same shared helpers
+/// as `handle_direct_request`, eliminating duplicate logic.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn handle_crypto_envelope(
     from: PeerId,
@@ -272,95 +597,220 @@ pub(crate) fn handle_crypto_envelope(
     match envelope {
         CryptoEnvelope::KeyOffer { public_key } => {
             tracing::info!(target: "crypto", "🔑 KeyOffer from {from} (gossipsub — legacy)");
-            match CryptoLayer::diffie_hellman(my_keys.private_key(), &public_key) {
-                Ok(shared) => {
-                    let already = crypto.has_session(&peer_str);
-                    crypto.create_session(&peer_str, &shared);
-                    tracing::info!(target: "crypto", "🔒 session with {from} {}", if already { "refreshed" } else { "created" });
-                    let _ = event_tx.send(P2PEvent::SessionEstablished { peer_id: from });
-
-                    if let Some(ref our_identity) = agent_identity {
-                        if let Ok(id_json) = serde_json::to_vec(our_identity) {
-                            let claim = CryptoEnvelope::Encrypted { ciphertext: id_json };
-                            if let Ok(bytes) = serde_json::to_vec(&claim) {
-                                let _ = swarm.behaviour_mut().gossipsub.publish(wt_topic(), bytes);
-                            }
+            if establish_session(from, &public_key, crypto, my_keys, event_tx).is_ok() {
+                // Legacy: publish identity via encrypted Gossipsub envelope
+                if let Some(ref our_identity) = agent_identity {
+                    if let Ok(id_json) = serde_json::to_vec(our_identity) {
+                        let claim = CryptoEnvelope::Encrypted { ciphertext: id_json };
+                        if let Ok(bytes) = serde_json::to_vec(&claim) {
+                            let _ = swarm.behaviour_mut().gossipsub.publish(wt_topic(), bytes);
                         }
                     }
-
-                    let accept = CryptoEnvelope::KeyAccept { public_key: my_keys.public.clone() };
-                    if let Ok(bytes) = serde_json::to_vec(&accept) {
-                        let _ = swarm.behaviour_mut().gossipsub.publish(wt_topic(), bytes);
-                    }
                 }
-                Err(e) => {
-                    tracing::error!(target: "crypto", "DH failed with {from}: {e}");
-                    let _ = event_tx.send(P2PEvent::SessionFailed { peer_id: from, reason: format!("DH failed: {e}") });
+
+                // Legacy: publish KeyAccept via Gossipsub
+                let accept = CryptoEnvelope::KeyAccept { public_key: my_keys.public.clone() };
+                if let Ok(bytes) = serde_json::to_vec(&accept) {
+                    let _ = swarm.behaviour_mut().gossipsub.publish(wt_topic(), bytes);
                 }
             }
         }
 
         CryptoEnvelope::KeyAccept { public_key } => {
             tracing::info!(target: "crypto", "🔑 KeyAccept from {from} (gossipsub — legacy)");
-            match CryptoLayer::diffie_hellman(my_keys.private_key(), &public_key) {
-                Ok(shared) => {
-                    let already = crypto.has_session(&peer_str);
-                    crypto.create_session(&peer_str, &shared);
-                    tracing::info!(target: "crypto", "🔒 session with {from} {}", if already { "refreshed" } else { "established" });
-                    let _ = event_tx.send(P2PEvent::SessionEstablished { peer_id: from });
-                }
-                Err(e) => {
-                    tracing::error!(target: "crypto", "DH failed with {from}: {e}");
-                    let _ = event_tx.send(P2PEvent::SessionFailed { peer_id: from, reason: format!("DH failed: {e}") });
-                }
-            }
+            let _ = establish_session(from, &public_key, crypto, my_keys, event_tx);
         }
 
         CryptoEnvelope::Encrypted { ciphertext } => {
             match crypto.decrypt_from(&peer_str, &ciphertext) {
                 Ok(plaintext) => {
-                    tracing::trace!(target: "crypto", "🔓 decrypted {} bytes from {from} (gossipsub)", plaintext.len());
-                    if let Ok(identity) = serde_json::from_slice::<AgentIdentity>(&plaintext) {
-                        match identity.verify() {
-                            Ok(()) => {
-                                tracing::info!(target: "identity", "🪪 verified agent '{}' from {from}", identity.display_name);
-                                let _ = event_tx.send(P2PEvent::AgentIdentified { peer_id: from, identity });
-                            }
-                            Err(e) => {
-                                tracing::warn!(target: "identity", "🪪 identity verification failed from {from}: {e}");
-                                let _ = event_tx.send(P2PEvent::IdentityVerificationFailed { peer_id: from, reason: e.to_string() });
-                            }
-                        }
-                    } else if let Ok(agent_msg) = serde_json::from_slice::<AgentMessage>(&plaintext) {
-                        tracing::info!(target: "protocol", "📋 structured [{}] from {}", agent_msg.protocol.tag(), agent_msg.from_agent.display_name);
-                        let _ = event_tx.send(P2PEvent::StructuredMessage { from, message: agent_msg });
-                    } else {
-                        let _ = event_tx.send(P2PEvent::EncryptedMessage { from, plaintext });
-                    }
+                    process_decrypted_payload(from, plaintext, "gossipsub", event_tx);
                 }
                 Err(e) => {
                     tracing::warn!(target: "crypto", "🔓 decrypt failed from {from}: {e}");
-                    let _ = event_tx.send(P2PEvent::SessionFailed { peer_id: from, reason: format!("decrypt: {e}") });
+                    let _ = event_tx.send(P2PEvent::SessionFailed {
+                        peer_id: from,
+                        reason: format!("decrypt: {e}"),
+                    });
                 }
             }
         }
 
         CryptoEnvelope::IdentityClaim { identity_json } => {
-            match serde_json::from_slice::<AgentIdentity>(&identity_json) {
-                Ok(identity) => match identity.verify() {
-                    Ok(()) => {
-                        tracing::info!(target: "identity", "🪪 verified agent '{}' from {from}", identity.display_name);
-                        let _ = event_tx.send(P2PEvent::AgentIdentified { peer_id: from, identity });
-                    }
-                    Err(e) => {
-                        tracing::warn!(target: "identity", "🪪 identity verification failed from {from}: {e}");
-                        let _ = event_tx.send(P2PEvent::IdentityVerificationFailed { peer_id: from, reason: e.to_string() });
-                    }
-                },
-                Err(e) => {
-                    tracing::warn!(target: "identity", "🪪 invalid identity JSON from {from}: {e}");
+            match verify_identity_claim(&identity_json) {
+                Ok(identity) => {
+                    let _ = event_tx.send(P2PEvent::AgentIdentified { peer_id: from, identity });
+                }
+                Err(reason) => {
+                    tracing::warn!(target: "identity", "🪪 {reason} from {from}");
+                    let _ = event_tx.send(P2PEvent::IdentityVerificationFailed {
+                        peer_id: from,
+                        reason,
+                    });
                 }
             }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Tests
+// ═══════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::resource::{ResourceAdvertisement, ResourceSpec};
+    use tokio::sync::mpsc;
+
+    fn make_provider_engine() -> ContributionEngine {
+        let mut engine = ContributionEngine::new("did:walkie:provider".into());
+        let ad = ResourceAdvertisement {
+            agent_id: "did:walkie:provider".into(),
+            sequence: 1,
+            timestamp: now_ms(),
+            spec: ResourceSpec {
+                cpu_cores: 4,
+                total_memory_mb: 8192,
+                max_bandwidth_up_mbps: 100,
+                total_storage_bytes: 256 * 1024 * 1024 * 1024,
+            },
+            cpu_offer: 0.5,
+            memory_offer_mb: 4096,
+            bandwidth_offer: 10_000_000,
+            storage_offer: 50 * 1024 * 1024 * 1024,
+            features: vec!["always-on".into()],
+            signature: Vec::new(),
+        };
+        engine.declare_resources(ad);
+        if let Some(ref our_ad) = engine.my_ad {
+            let _ = engine.on_resource_ad(our_ad.clone());
+        }
+        engine
+    }
+
+    fn make_request() -> ResourceRequest {
+        ResourceRequest {
+            consumer_id: "did:walkie:consumer".into(),
+            min_cpu: 0.2,
+            min_memory_mb: 1024,
+            min_bandwidth: 0,
+            min_storage: 0,
+            required_features: vec![],
+            duration_ms: 60_000,
+            priority: 75,
+        }
+    }
+
+    #[test]
+    fn test_handle_resource_request_no_match() {
+        let mut engine = ContributionEngine::new("did:walkie:provider".into());
+        let request = make_request();
+        let (tx, _rx) = mpsc::unbounded_channel();
+
+        let response = handle_resource_request(PeerId::random(), request, 42, &tx, &mut engine);
+        assert!(matches!(response.status, DirectResponseStatus::Error(_)));
+    }
+
+    #[test]
+    fn test_handle_resource_request_with_match() {
+        let mut engine = make_provider_engine();
+        let request = make_request();
+        let (tx, _rx) = mpsc::unbounded_channel();
+
+        let response = handle_resource_request(PeerId::random(), request, 42, &tx, &mut engine);
+        // Offer encoded in Error field (workaround)
+        assert!(matches!(response.status, DirectResponseStatus::Error(_)));
+
+        let pending = engine.sessions.list_by_status(crate::resource::SessionStatus::Pending);
+        assert_eq!(pending.len(), 1);
+    }
+
+    #[test]
+    fn test_handle_resource_accept() {
+        let mut engine = make_provider_engine();
+        let mut request = make_request();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let from = PeerId::random();
+        request.consumer_id = from.to_string();
+
+        handle_resource_request(from, request, 1, &tx, &mut engine);
+
+        let response = handle_resource_accept(from, "accept-x".into(), 2, &tx, &mut engine);
+        assert!(matches!(response.status, DirectResponseStatus::Ok));
+
+        let active = engine.sessions.list_by_status(crate::resource::SessionStatus::Active);
+        assert_eq!(active.len(), 1);
+    }
+
+    #[test]
+    fn test_handle_resource_release() {
+        let mut engine = make_provider_engine();
+        let mut request = make_request();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let from = PeerId::random();
+        request.consumer_id = from.to_string();
+
+        handle_resource_request(from, request.clone(), 1, &tx, &mut engine);
+        handle_resource_accept(from, "accept-x".into(), 2, &tx, &mut engine);
+
+        let active = engine.sessions.list_by_status(crate::resource::SessionStatus::Active);
+        assert_eq!(active.len(), 1);
+        let session_id = active[0].session_id.clone();
+
+        let receipt = WorkReceipt::new(
+            from.to_string(),
+            "did:walkie:provider".into(),
+            session_id.clone(),
+            5000,
+            1024 * 1024,
+            10_000,
+        );
+
+        let response = handle_resource_release(from, receipt, 3, &tx, &mut engine);
+        assert!(matches!(response.status, DirectResponseStatus::Ok));
+
+        let released = engine.sessions.list_by_status(crate::resource::SessionStatus::Released);
+        assert_eq!(released.len(), 1);
+    }
+
+    #[test]
+    fn test_resource_request_roundtrip_serialization() {
+        let payloads = vec![
+            DirectPayload::ResourceRequest {
+                request: ResourceRequest::new("consumer".into()),
+            },
+            DirectPayload::ResourceOffer {
+                offer: ResourceOffer {
+                    provider_id: "provider".into(),
+                    consumer_id: "consumer".into(),
+                    cpu_amount: 0.2,
+                    memory_amount_mb: 1024,
+                    bandwidth_amount: 0,
+                    storage_amount: 0,
+                    expires_at: now_ms() + 60_000,
+                    signature: Vec::new(),
+                },
+            },
+            DirectPayload::ResourceAccept { session_id: "sess-1".into() },
+            DirectPayload::ResourceSessionActivated {
+                session_id: "sess-1".into(),
+                expires_at: now_ms() + 60_000,
+            },
+            DirectPayload::ResourceRelease {
+                receipt: WorkReceipt::new("c".into(), "p".into(), "s1".into(), 1000, 1024, 5000),
+            },
+            DirectPayload::ResourceReleaseAck {
+                session_id: "s1".into(),
+                contribution_delta: 1.5,
+            },
+        ];
+
+        for payload in payloads {
+            let req = DirectRequest { request_id: 99, payload };
+            let json = serde_json::to_vec(&req).unwrap();
+            let decoded: DirectRequest = serde_json::from_slice(&json).unwrap();
+            assert_eq!(req, decoded, "roundtrip failed for {:?}", req.payload);
         }
     }
 }
