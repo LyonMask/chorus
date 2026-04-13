@@ -447,7 +447,7 @@ async fn test_disconnect_reconnect_resource_request() {
     // and move on — a proper pending drain test requires fixed identity.
     //
     // B2 connects as a fresh peer: A sends request to B2 directly.
-    let (net_b2, mut ev_b2, addr_b2) = spawn_node().await;
+    let (net_b2, mut ev_b2, _addr_b2) = spawn_node().await;
     let ad_b2 = test_ad("provider-b", 0.5, 4096);
     net_b2.update_resource_ad(ad_b2).await.expect("B2 update ad");
 

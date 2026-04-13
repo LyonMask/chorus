@@ -18,10 +18,9 @@ use crate::crypto::{CryptoLayer, KeyPair};
 use crate::identity::AgentIdentity;
 use crate::protocol::AgentMessage;
 use crate::resource::{
-    ContributionEngine, MatchEngine, RejectReason, ResourceOffer, ResourceRequest, WorkReceipt,
+    ContributionEngine, RejectReason, ResourceOffer, ResourceRequest, WorkReceipt,
 };
 use crate::resource::now_ms;
-use crate::resource::match_engine::RESERVATION_TTL_MS;
 
 use super::behaviour::WalkieBehaviour;
 use super::direct::{self, DirectPayload, DirectRequest, DirectResponse, DirectResponseStatus};
