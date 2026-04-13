@@ -148,13 +148,15 @@ pub struct TrustScore {
 }
 
 impl TrustScore {
-    /// Weighted composite score: identity×0.2 + endorsement×0.5 + guarantor×0.2 + slash×0.1.
+    /// Weighted composite score: (identity×0.2 + endorsement×0.5 + guarantor×0.2) × slash_decay.
     /// Then multiplied by recency_weight and clamped to [0.0, 1.0].
+    ///
+    /// `slash_penalty` is a decay factor (1.0=no penalty, 0.0=max penalty).
     pub fn composite(&self) -> f64 {
-        let raw = self.identity_score * 0.2
+        let base = self.identity_score * 0.2
             + self.endorsement_score * 0.5
-            + self.guarantor_boost * 0.2
-            + self.slash_penalty * 0.1;
+            + self.guarantor_boost * 0.2;
+        let raw = base * self.slash_penalty;
         (raw * self.recency_weight).clamp(0.0, 1.0)
     }
 

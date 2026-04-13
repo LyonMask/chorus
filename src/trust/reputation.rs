@@ -57,18 +57,19 @@ pub fn guarantor_component(has_guarantor: bool, guarantor_endorsement_avg: f64) 
     0.5
 }
 
-/// Compute the slash penalty component (0.0 = no penalty, 1.0 = max penalty).
+/// Compute the slash penalty decay factor (1.0 = no penalty, 0.0 = max penalty).
 ///
-/// - 0 active strikes → 0.0
-/// - 1 strike → 0.3
-/// - 2 strikes → 0.6
-/// - 3+ strikes → 1.0
+/// Used as a multiplicative decay on the composite score:
+/// - 0 active strikes → 1.0 (no reduction)
+/// - 1 strike → 0.7 (30% reduction)
+/// - 2 strikes → 0.4 (60% reduction)
+/// - 3+ strikes → 0.0 (complete slash)
 pub fn slash_component(active_strike_count: u32) -> f64 {
     match active_strike_count {
-        0 => 0.0,
-        1 => 0.3,
-        2 => 0.6,
-        _ => 1.0,
+        0 => 1.0,
+        1 => 0.7,
+        2 => 0.4,
+        _ => 0.0,
     }
 }
 
@@ -143,11 +144,12 @@ mod tests {
 
     #[test]
     fn test_slash_component_levels() {
-        assert!((slash_component(0) - 0.0).abs() < 0.01);
-        assert!((slash_component(1) - 0.3).abs() < 0.01);
-        assert!((slash_component(2) - 0.6).abs() < 0.01);
-        assert!((slash_component(3) - 1.0).abs() < 0.01);
-        assert!((slash_component(99) - 1.0).abs() < 0.01);
+        // slash_component returns decay factor: 1.0 = no penalty, 0.0 = max penalty
+        assert!((slash_component(0) - 1.0).abs() < 0.01);
+        assert!((slash_component(1) - 0.7).abs() < 0.01);
+        assert!((slash_component(2) - 0.4).abs() < 0.01);
+        assert!((slash_component(3) - 0.0).abs() < 0.01);
+        assert!((slash_component(99) - 0.0).abs() < 0.01);
     }
 
     #[test]
@@ -165,7 +167,6 @@ mod tests {
     #[test]
     fn test_recalculate_new_node() {
         let score = recalculate(0, 0.0, false, 0.0, 0, 1);
-        // identity=0, endorsement=0, guarantor=0, slash=0 → composite=0
         assert!((score.composite() - 0.0).abs() < 0.01);
         assert_eq!(score.level(), super::super::types::TrustLevel::Unverified);
         assert!((score.crp_multiplier() - 0.5).abs() < 0.01);
@@ -174,26 +175,23 @@ mod tests {
     #[test]
     fn test_recalculate_cryptographic_node() {
         let score = recalculate(1, 0.8, false, 0.0, 0, 1);
-        // identity=0.5, endorsement=0.8 → composite = 0.5*0.2 + 0.8*0.5 = 0.5
-        // Guaranteed: composite >= 0.6? No → Cryptographic: >= 0.3? Yes
+        // base=0.5*0.2+0.8*0.5+0*0.2=0.5, slash=1.0, recency=1.0
         assert!((score.composite() - 0.5).abs() < 0.01);
         assert_eq!(score.level(), super::super::types::TrustLevel::Cryptographic);
     }
 
     #[test]
     fn test_recalculate_guaranteed_node() {
-        // identity=0.7(Guaranteed), endorsement=0.9, guarantor=0.5
-        // composite = 0.7*0.2 + 0.9*0.5 + 0.5*0.2 + 0*0.1 = 0.14+0.45+0.1 = 0.69
         let score = recalculate(2, 0.9, true, 0.5, 0, 1);
+        // base=0.7*0.2+0.9*0.5+0.5*0.2=0.69, slash=1.0
         assert!((score.composite() - 0.69).abs() < 0.01);
         assert_eq!(score.level(), super::super::types::TrustLevel::Guaranteed);
     }
 
     #[test]
     fn test_recalculate_community_verified() {
-        // identity=1.0, endorsement=0.95, guarantor=1.0
-        // composite = 0.2 + 0.475 + 0.2 = 0.875
         let score = recalculate(3, 0.95, true, 0.95, 0, 1);
+        // base=1.0*0.2+0.95*0.5+1.0*0.2=0.875, slash=1.0
         assert!((score.composite() - 0.875).abs() < 0.01);
         assert_eq!(score.level(), super::super::types::TrustLevel::CommunityVerified);
     }
@@ -202,24 +200,20 @@ mod tests {
     fn test_slash_reduces_score() {
         let clean = recalculate(2, 0.9, true, 0.8, 0, 1);
         let slashed = recalculate(2, 0.9, true, 0.8, 2, 1);
-        // clean: 0.7*0.2 + 0.9*0.5 + 0.8*0.2 + 0*0.1 = 0.14+0.45+0.16 = 0.75
-        // slashed: 0.14+0.45+0.16+0.6*0.1 = 0.81 (slash_penalty increases composite!)
-        // Wait — slash_penalty is subtractive. A high slash_penalty means MORE penalty.
-        // The formula is: raw = identity*0.2 + endorsement*0.5 + guarantor*0.2 + slash*0.1
-        // slash=0.6 adds 0.06 to raw. This doesn't reduce — it INCREASES.
-        // The naming is confusing: slash_penalty should REDUCE the score.
-        // For now, the test verifies the math as implemented.
-        assert!(slashed.composite() > clean.composite()); // slash adds to raw
-        // This is a design issue — slash_penalty should be (1.0 - penalty) or subtracted
+        // clean: base=0.75, slash_decay=1.0 → 0.75
+        // slashed: base=0.75, slash_decay=0.4 → 0.30
+        assert!(slashed.composite() < clean.composite());
+        assert!((clean.composite() - 0.75).abs() < 0.01);
+        assert!((slashed.composite() - 0.30).abs() < 0.01);
     }
 
     #[test]
     fn test_recency_affects_score() {
-        let recent = recalculate(1, 0.8, false, 0.0, 0, 1); // recency=1.0
-        let stale = recalculate(1, 0.8, false, 0.0, 0, 100); // recency=0.2
+        let recent = recalculate(1, 0.8, false, 0.0, 0, 1);
+        let stale = recalculate(1, 0.8, false, 0.0, 0, 100);
+        // recent: base=0.5 * slash=1.0 * recency=1.0 = 0.5
+        // stale: base=0.5 * slash=1.0 * recency=0.2 = 0.1
         assert!(recent.composite() > stale.composite());
-        // recent composite = 0.5 (full weight)
-        // stale composite = 0.5 * 0.2 = 0.1
         assert!((recent.composite() - 0.5).abs() < 0.01);
         assert!((stale.composite() - 0.1).abs() < 0.01);
     }
@@ -241,19 +235,19 @@ mod tests {
     fn test_trust_bonus_per_level() {
         use super::super::types::TrustLevel;
 
-        let score_unverified = TrustScore::from_components(0.0, 0.0, 0.0, 0.0, 1.0);
+        let score_unverified = TrustScore::from_components(0.0, 0.0, 0.0, 1.0, 1.0);
         assert_eq!(score_unverified.level(), TrustLevel::Unverified);
         assert!((score_unverified.trust_bonus() - 0.0).abs() < 0.01);
 
-        let score_crypto = TrustScore::from_components(0.5, 0.8, 0.0, 0.0, 1.0);
+        let score_crypto = TrustScore::from_components(0.5, 0.8, 0.0, 1.0, 1.0);
         assert_eq!(score_crypto.level(), TrustLevel::Cryptographic);
         assert!((score_crypto.trust_bonus() - 0.0).abs() < 0.01);
 
-        let score_guaranteed = TrustScore::from_components(0.7, 0.9, 0.5, 0.0, 1.0);
+        let score_guaranteed = TrustScore::from_components(0.7, 0.9, 0.5, 1.0, 1.0);
         assert_eq!(score_guaranteed.level(), TrustLevel::Guaranteed);
         assert!((score_guaranteed.trust_bonus() - 0.10).abs() < 0.01);
 
-        let score_community = TrustScore::from_components(1.0, 0.95, 1.0, 0.0, 1.0);
+        let score_community = TrustScore::from_components(1.0, 0.95, 1.0, 1.0, 1.0);
         assert_eq!(score_community.level(), TrustLevel::CommunityVerified);
         assert!((score_community.trust_bonus() - 0.25).abs() < 0.01);
     }
