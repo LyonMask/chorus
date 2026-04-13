@@ -6,6 +6,8 @@ use std::collections::HashMap;
 
 /// How long an offer remains valid before automatic expiry (ms).
 const OFFER_TTL_MS: u64 = 30_000; // 30 seconds
+/// Maximum concurrent active+pending sessions per node.
+const MAX_CONCURRENT_SESSIONS: usize = 8;
 
 /// Manages active resource sessions on the provider side.
 #[derive(Debug, Clone)]
@@ -175,6 +177,16 @@ impl ResourceSessionManager {
         cpu: f32,
         memory_mb: u64,
     ) -> bool {
+        // Enforce maximum concurrent sessions to prevent resource exhaustion.
+        let active_count = self
+            .sessions
+            .values()
+            .filter(|s| s.status == SessionStatus::Active || s.status == SessionStatus::Pending)
+            .count();
+        if active_count >= MAX_CONCURRENT_SESSIONS {
+            return false;
+        }
+
         let (used_cpu, used_mem, _, _) = self
             .allocations
             .get(provider)
@@ -236,6 +248,7 @@ mod tests {
             bandwidth_offer: 0,
             storage_offer: 0,
             features: vec![],
+            signing_pubkey: Vec::new(),
             signature: Vec::new(),
         }
     }
@@ -387,5 +400,41 @@ mod tests {
         let (cpu, mem) = mgr.current_allocation("provider");
         assert!((cpu - 0.3).abs() < f32::EPSILON);
         assert_eq!(mem, 3072);
+    }
+
+    #[test]
+    fn test_max_concurrent_sessions() {
+        let mut mgr = ResourceSessionManager::new();
+        let ad = make_ad(8.0, 65536); // plenty of resources
+
+        // Create 7 sessions (below limit of 8)
+        for i in 0..7 {
+            let _sid = mgr.create_session(
+                format!("consumer-{i}"), "provider".into(), 0.1, 512, 60_000,
+            );
+        }
+        assert!(
+            mgr.can_allocate("provider", &ad, 0.1, 512),
+            "7 sessions should still allow one more"
+        );
+
+        // 8th session hits the limit
+        mgr.create_session("consumer-7".into(), "provider".into(), 0.1, 512, 60_000);
+        assert!(
+            !mgr.can_allocate("provider", &ad, 0.1, 512),
+            "8 sessions should reject 9th (at max limit)"
+        );
+
+        // Release one, should allow again
+        let first_sid = {
+            let pending = mgr.list_by_status(SessionStatus::Pending);
+            assert_eq!(pending.len(), 8);
+            pending[0].session_id.clone()
+        };
+        mgr.release(&first_sid);
+        assert!(
+            mgr.can_allocate("provider", &ad, 0.1, 512),
+            "should allow after releasing one"
+        );
     }
 }
