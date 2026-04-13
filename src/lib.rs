@@ -1,4 +1,5 @@
 pub mod crypto;
+pub mod economy;
 pub mod gateway;
 pub mod identity;
 pub mod p2p;
@@ -7,6 +8,7 @@ pub mod ratelimit;
 pub mod registry;
 pub mod resource;
 pub mod tenant;
+pub mod trust;
 
 #[cfg(feature = "tui")]
 pub mod tui;

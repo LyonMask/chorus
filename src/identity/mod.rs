@@ -258,13 +258,13 @@ impl IdentityBuilder {
     }
 
     /// Build with a pre-existing signing key (for deterministic testing).
-    #[cfg(test)]
-    pub fn build_with_key(self, signing_key: &SigningKey) -> Result<AgentIdentity> {
-        let verifying_key = signing_key.verifying_key();
-        let pubkey_bytes = verifying_key.to_bytes();
-
+    pub fn build_with_key(self, signing_key: &ed25519_dalek::SigningKey) -> Result<AgentIdentity> {
+        let pubkey_bytes = signing_key.verifying_key().to_bytes();
         let agent_id = did_from_pubkey(&pubkey_bytes);
-        let created_at = 1700000000000u64; // deterministic for tests
+        let created_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
 
         let identity = AgentIdentity {
             agent_id,
@@ -280,12 +280,132 @@ impl IdentityBuilder {
         let payload = identity.signing_payload()?;
         let signature = signing_key.sign(&payload);
 
-        let signed = AgentIdentity {
+        Ok(AgentIdentity {
             signature: signature.to_bytes().to_vec(),
             ..identity
-        };
+        })
+    }
+}
 
-        Ok(signed)
+// ─── Identity Registry (PeerId↔DID Binding) ─────────────────────
+
+/// A verified mapping between a libp2p PeerId and a did:walkie DID.
+#[derive(Debug, Clone)]
+pub struct PeerDidBinding {
+    /// The did:walkie identifier (e.g. "did:walkie:abc123")
+    pub did: String,
+    /// Ed25519 public key (32 bytes)
+    pub pub_key: Vec<u8>,
+    /// Unix timestamp (ms) when the binding was created
+    pub bound_at: u64,
+    /// Current trust level for this binding.
+    /// 0 = Unverified, 1 = Cryptographic, 2 = Guaranteed, 3 = CommunityVerified.
+    pub trust_level: u8,
+}
+
+/// Registry for bidirectional PeerId↔DID bindings.
+///
+/// Maintains two lookup indexes:
+///   peer_id → DID  (used when receiving a message: "who sent this?")
+///   DID → peer_id  (used when sending: "where is this agent?")
+#[derive(Debug, Clone)]
+pub struct IdentityRegistry {
+    peer_to_did: std::collections::HashMap<String, PeerDidBinding>,
+    did_to_peer: std::collections::HashMap<String, String>,
+}
+
+impl Default for IdentityRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl IdentityRegistry {
+    pub fn new() -> Self {
+        Self {
+            peer_to_did: std::collections::HashMap::new(),
+            did_to_peer: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Bind a peer_id to a DID with auto-cleanup of old bindings.
+    pub fn bind(&mut self, peer_id: &str, did: &str, pub_key: Vec<u8>) {
+        if let Some(old) = self.peer_to_did.remove(peer_id) {
+            self.did_to_peer.remove(&old.did);
+        }
+        if let Some(old_peer) = self.did_to_peer.remove(did) {
+            self.peer_to_did.remove(&old_peer);
+        }
+        let binding = PeerDidBinding {
+            did: did.to_string(),
+            pub_key,
+            bound_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+            trust_level: 0,
+        };
+        self.peer_to_did.insert(peer_id.to_string(), binding);
+        self.did_to_peer.insert(did.to_string(), peer_id.to_string());
+    }
+
+    /// Look up DID by peer_id.
+    pub fn did_for_peer(&self, peer_id: &str) -> Option<&str> {
+        self.peer_to_did.get(peer_id).map(|b| b.did.as_str())
+    }
+
+    /// Look up peer_id by DID.
+    pub fn peer_for_did(&self, did: &str) -> Option<&str> {
+        self.did_to_peer.get(did).map(|s| s.as_str())
+    }
+
+    /// Remove a binding by peer_id. Returns `true` if a binding existed.
+    pub fn unbind(&mut self, peer_id: &str) -> bool {
+        if let Some(binding) = self.peer_to_did.remove(peer_id) {
+            self.did_to_peer.remove(&binding.did);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Get the full binding for a peer_id.
+    pub fn get_binding(&self, peer_id: &str) -> Option<&PeerDidBinding> {
+        self.peer_to_did.get(peer_id)
+    }
+
+    /// Bind with cryptographic verification (sets trust level to Cryptographic).
+    pub fn bind_verified(
+        &mut self,
+        peer_id: &str,
+        pub_key: Vec<u8>,
+    ) -> std::result::Result<(), crate::trust::types::TrustError> {
+        use crate::trust::types::TrustError;
+        if let Some(binding) = self.peer_to_did.get_mut(peer_id) {
+            if binding.pub_key != pub_key {
+                return Err(TrustError::InvalidSignature);
+            }
+            binding.trust_level = 1; // Cryptographic
+            Ok(())
+        } else {
+            Err(TrustError::UnknownDid)
+        }
+    }
+
+    /// Get the trust level for a peer.
+    pub fn trust_level(&self, peer_id: &str) -> Option<u8> {
+        self.peer_to_did.get(peer_id).map(|b| b.trust_level)
+    }
+
+    /// Number of active bindings.
+    pub fn len(&self) -> usize {
+        self.peer_to_did.len()
+    }
+
+    /// Check if the registry is empty.
+    #[allow(dead_code)]
+    pub fn is_empty(&self) -> bool {
+        self.peer_to_did.is_empty()
     }
 }
 
@@ -742,105 +862,6 @@ mod tests {
 
         assert!(verify_advertisement(&ad).is_err());
     }
-
-    // ── IdentityRegistry ──
-
-/// A verified mapping between a libp2p PeerId and a did:walkie DID.
-#[derive(Debug, Clone)]
-pub struct PeerDidBinding {
-    /// The did:walkie identifier (e.g. "did:walkie:abc123")
-    pub did: String,
-    /// Ed25519 public key (32 bytes)
-    pub pub_key: Vec<u8>,
-    /// Unix timestamp (ms) when the binding was created
-    pub bound_at: u64,
-}
-
-/// Registry for bidirectional PeerId↔DID bindings.
-///
-/// Maintains two lookup indexes:
-///   peer_id → DID  (used when receiving a message: "who sent this?")
-///   DID → peer_id  (used when sending: "where is this agent?")
-#[derive(Debug, Clone)]
-pub struct IdentityRegistry {
-    peer_to_did: std::collections::HashMap<String, PeerDidBinding>,
-    did_to_peer: std::collections::HashMap<String, String>,
-}
-
-impl Default for IdentityRegistry {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl IdentityRegistry {
-    pub fn new() -> Self {
-        Self {
-            peer_to_did: std::collections::HashMap::new(),
-            did_to_peer: std::collections::HashMap::new(),
-        }
-    }
-
-    /// Bind a peer_id to a DID. If the DID was already bound to a different
-    /// peer, the old binding is removed first (reconnection scenario).
-    pub fn bind(&mut self, peer_id: &str, did: &str, pub_key: Vec<u8>) {
-        // Remove old peer→DID if this peer was bound before
-        if let Some(old) = self.peer_to_did.remove(peer_id) {
-            self.did_to_peer.remove(&old.did);
-        }
-        // Remove old DID→peer if this DID was bound to a different peer
-        if let Some(old_peer) = self.did_to_peer.remove(did) {
-            self.peer_to_did.remove(&old_peer);
-        }
-
-        let binding = PeerDidBinding {
-            did: did.to_string(),
-            pub_key,
-            bound_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64,
-        };
-        self.peer_to_did.insert(peer_id.to_string(), binding);
-        self.did_to_peer.insert(did.to_string(), peer_id.to_string());
-    }
-
-    /// Look up DID by peer_id.
-    pub fn did_for_peer(&self, peer_id: &str) -> Option<&str> {
-        self.peer_to_did.get(peer_id).map(|b| b.did.as_str())
-    }
-
-    /// Look up peer_id by DID.
-    pub fn peer_for_did(&self, did: &str) -> Option<&str> {
-        self.did_to_peer.get(did).map(|s| s.as_str())
-    }
-
-    /// Remove a binding by peer_id. Returns `true` if a binding existed.
-    pub fn unbind(&mut self, peer_id: &str) -> bool {
-        if let Some(binding) = self.peer_to_did.remove(peer_id) {
-            self.did_to_peer.remove(&binding.did);
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Get the full binding for a peer_id.
-    pub fn get_binding(&self, peer_id: &str) -> Option<&PeerDidBinding> {
-        self.peer_to_did.get(peer_id)
-    }
-
-    /// Number of active bindings.
-    pub fn len(&self) -> usize {
-        self.peer_to_did.len()
-    }
-
-    /// Check if the registry is empty.
-    #[allow(dead_code)]
-    pub fn is_empty(&self) -> bool {
-        self.peer_to_did.is_empty()
-    }
-}
 
     // ── IdentityRegistry Tests ──
 

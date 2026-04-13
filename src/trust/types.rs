@@ -1,0 +1,158 @@
+//! Shared types for the trust layer.
+
+use serde::{Deserialize, Serialize};
+
+/// Trust level assigned to a peer after identity verification.
+///
+/// Progresses through levels as a node accumulates cryptographic
+/// proof, guarantor backing, and community endorsements.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
+pub enum TrustLevel {
+    /// Peer claimed a DID but provided no cryptographic proof.
+    Unverified,
+    /// DID ↔ PeerId verified via IdentityAttestation signature.
+    Cryptographic,
+    /// Backed by a guarantor's vouching.
+    Guaranteed,
+    /// Multiple peers independently vouch for this identity.
+    CommunityVerified,
+}
+
+impl Default for TrustLevel {
+    fn default() -> Self {
+        Self::Unverified
+    }
+}
+
+impl std::fmt::Display for TrustLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unverified => write!(f, "Unverified"),
+            Self::Cryptographic => write!(f, "Cryptographic"),
+            Self::Guaranteed => write!(f, "Guaranteed"),
+            Self::CommunityVerified => write!(f, "CommunityVerified"),
+        }
+    }
+}
+
+/// Errors emitted by trust-layer operations.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TrustError {
+    /// Ed25519 signature verification failed.
+    InvalidSignature,
+    /// Attestation has expired.
+    Expired,
+    /// Attestation was replayed (nonce already seen).
+    Replayed,
+    /// The DID in the attestation does not match the known identity.
+    DidMismatch,
+    /// The PeerId in the attestation does not match the connection.
+    PeerIdMismatch,
+    /// No public key on record for this DID.
+    UnknownDid,
+    /// The peer is not yet verified at the required level.
+    InsufficientTrust,
+    /// Generic trust-layer error.
+    Other(String),
+}
+
+impl std::fmt::Display for TrustError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidSignature => write!(f, "invalid signature"),
+            Self::Expired => write!(f, "attestation expired"),
+            Self::Replayed => write!(f, "replay detected"),
+            Self::DidMismatch => write!(f, "DID mismatch"),
+            Self::PeerIdMismatch => write!(f, "PeerId mismatch"),
+            Self::UnknownDid => write!(f, "unknown DID"),
+            Self::InsufficientTrust => write!(f, "insufficient trust level"),
+            Self::Other(msg) => write!(f, "{msg}"),
+        }
+    }
+}
+
+impl std::error::Error for TrustError {}
+
+/// Result of an endorsement cross-validation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum EndorsementResult {
+    /// Provider's claimed usage is within tolerance of consumer's measurement.
+    Honest,
+    /// Minor discrepancy (10%–50%) — flag but don't slash.
+    Suspicious { discrepancy_percent: f64 },
+    /// Major discrepancy (>50%) — slash.
+    Fraud { discrepancy_percent: f64 },
+}
+
+impl PartialEq for EndorsementResult {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Honest, Self::Honest) => true,
+            (Self::Suspicious { discrepancy_percent: a }, Self::Suspicious { discrepancy_percent: b }) => {
+                (a - b).abs() < f64::EPSILON
+            }
+            (Self::Fraud { discrepancy_percent: a }, Self::Fraud { discrepancy_percent: b }) => {
+                (a - b).abs() < f64::EPSILON
+            }
+            _ => false,
+        }
+    }
+}
+
+impl std::fmt::Display for EndorsementResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Honest => write!(f, "Honest"),
+            Self::Suspicious { discrepancy_percent } => {
+                write!(f, "Suspicious ({discrepancy_percent:.1}%)")
+            }
+            Self::Fraud { discrepancy_percent } => {
+                write!(f, "Fraud ({discrepancy_percent:.1}%)")
+            }
+        }
+    }
+}
+
+/// 10% tolerance for endorsement validation.
+pub const MEASUREMENT_TOLERANCE_PERCENT: f64 = 10.0;
+
+/// 5-minute TTL for identity attestations (replay defense).
+pub const ATTESTATION_TTL_SECS: u64 = 300;
+
+/// Wrapper for const access (allows future runtime override).
+pub struct AttestationTtlSecs;
+impl AttestationTtlSecs {
+    pub const VALUE: u64 = ATTESTATION_TTL_SECS;
+}
+
+/// Composite trust score for a node.  Range 0.0–1.0.
+///
+/// Phase 4.1: weighted average of identity, endorsement, guarantor,
+/// and slash components.  Phase 4.0 only uses `identity_score`.
+#[derive(Debug, Clone, Default)]
+pub struct TrustScore {
+    pub identity_score: f64,
+    pub endorsement_score: f64,
+    pub guarantor_boost: f64,
+    pub slash_penalty: f64,
+    pub recency_weight: f64,
+}
+
+impl TrustScore {
+    pub fn composite(&self) -> f64 {
+        let raw = self.identity_score * 0.2
+            + self.endorsement_score * 0.5
+            + self.guarantor_boost * 0.2
+            + self.slash_penalty * 0.1;
+        (raw * self.recency_weight).clamp(0.0, 1.0)
+    }
+
+    pub fn level(&self) -> TrustLevel {
+        match self.composite() {
+            x if x >= 0.8 => TrustLevel::CommunityVerified,
+            x if x >= 0.6 => TrustLevel::Guaranteed,
+            x if x >= 0.3 => TrustLevel::Cryptographic,
+            _ => TrustLevel::Unverified,
+        }
+    }
+}

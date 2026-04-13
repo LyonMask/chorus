@@ -188,6 +188,8 @@ pub(crate) fn handle_direct_request(
     event_tx: &mpsc::UnboundedSender<P2PEvent>,
     agent_identity: &Option<AgentIdentity>,
     resource_engine: &mut ContributionEngine,
+    identity_registry: &mut Option<crate::identity::IdentityRegistry>,
+    signing_key: &Option<std::sync::Arc<ed25519_dalek::SigningKey>>,
 ) -> DirectResponse {
     let peer_str = from.to_string();
     let request_id = request.request_id;
@@ -221,6 +223,8 @@ pub(crate) fn handle_direct_request(
                 return DirectResponse { request_id, status: DirectResponseStatus::Error(reason) };
             }
             send_resource_declaration(swarm, resource_engine, &from);
+            // Auto-send IdentityAttestation after key exchange (Phase 4)
+            send_identity_attestation(swarm, &from, signing_key, agent_identity);
             direct::ok_response(request_id)
         }
 
@@ -310,6 +314,11 @@ pub(crate) fn handle_direct_request(
 
         DirectPayload::ResourceReject { request_id: rejected_req_id, reason } => {
             handle_resource_reject(from, rejected_req_id, reason, request_id, event_tx, resource_engine)
+        }
+
+        DirectPayload::IdentityAttestation { attestation_json } => {
+            let (resp, _next) = handle_identity_attestation(from, &attestation_json, request_id, event_tx, identity_registry);
+            resp
         }
     }
 }
@@ -775,6 +784,122 @@ pub(crate) fn handle_crypto_envelope(
 // Tests
 // ═══════════════════════════════════════════════════════════════
 
+// Identity attestation (Phase 4)
+
+
+
+/// Send an IdentityAttestation over the Direct channel (Phase 4).
+///
+/// Called automatically after E2EE session establishment to prove
+/// that our PeerId belongs to our claimed DID.
+pub(crate) fn send_identity_attestation(
+    swarm: &mut Swarm<WalkieBehaviour>,
+    peer_id: &PeerId,
+    signing_key: &Option<std::sync::Arc<ed25519_dalek::SigningKey>>,
+    agent_identity: &Option<AgentIdentity>,
+) {
+    let (did, key) = match (agent_identity, signing_key) {
+        (Some(ident), Some(key)) => (ident.agent_id.clone(), key.clone()),
+        _ => return, // No identity or signing key configured — skip
+    };
+
+    let attestation = crate::trust::peer_binding::IdentityAttestation::sign(
+        &did,
+        &peer_id.to_string(),
+        &key,
+    );
+
+    match serde_json::to_vec(&attestation) {
+        Ok(json) => {
+            let req = direct::DirectRequest {
+                request_id: 0, // attestation is unsolicited (request_id unused)
+                payload: direct::DirectPayload::IdentityAttestation { attestation_json: json },
+            };
+            let _ = swarm.behaviour_mut().direct.send_request(peer_id, req);
+            tracing::info!(target: "trust", "🔐 sent IdentityAttestation to {peer_id}");
+        }
+        Err(e) => {
+            tracing::warn!(target: "trust", "⚠️  failed to serialize attestation: {e}");
+        }
+    }
+}
+
+/// Handle an incoming IdentityAttestation over the Direct channel.
+///
+/// Verifies the Ed25519 signature, checks nonce uniqueness (replay defense),
+/// and updates the IdentityRegistry to mark the binding as Cryptographic.
+pub(crate) fn handle_identity_attestation(
+    from: PeerId,
+    attestation_json: &[u8],
+    request_id: u64,
+    event_tx: &mpsc::UnboundedSender<P2PEvent>,
+    identity_registry: &mut Option<crate::identity::IdentityRegistry>,
+) -> (DirectResponse, Option<DirectRequest>) {
+    use crate::trust::peer_binding::IdentityAttestation;
+
+    // Deserialize
+    let attestation: IdentityAttestation = match serde_json::from_slice(attestation_json) {
+        Ok(a) => a,
+        Err(e) => {
+            tracing::warn!(target: "trust", "⚠️  Invalid attestation JSON from {from}: {e}");
+            return (direct::error_response(request_id, "invalid attestation json"), None);
+        }
+    };
+
+    let peer_id_str = from.to_string();
+
+    // Get expected DID and public key from the identity registry
+    let registry = match identity_registry.as_mut() {
+        Some(r) => r,
+        None => {
+            tracing::debug!(target: "trust", "No identity registry, skipping attestation from {from}");
+            return (direct::ok_response(request_id), None);
+        }
+    };
+
+    let expected_did = match registry.did_for_peer(&peer_id_str) {
+        Some(did) => did.to_string(),
+        None => {
+            tracing::debug!(target: "trust", "No prior DID binding for peer {from}, skipping attestation");
+            return (direct::ok_response(request_id), None);
+        }
+    };
+
+    let expected_pubkey = match registry.get_binding(&peer_id_str) {
+        Some(binding) => binding.pub_key.clone(),
+        None => {
+            return (direct::error_response(request_id, "no binding found"), None);
+        }
+    };
+
+    // Verify attestation: signature + timestamp + DID/PeerId match
+    match attestation.verify_with_identity(&expected_did, &peer_id_str, &expected_pubkey) {
+        Ok(()) => {
+            // Update trust level to Cryptographic
+            match registry.bind_verified(&peer_id_str, expected_pubkey) {
+                Ok(()) => {
+                    tracing::info!(
+                        target: "trust",
+                        "🔐 PeerId↔DID verified: {from} ↔ did:{expected_did} (Cryptographic)",
+                    );
+                    let _ = event_tx.send(P2PEvent::IdentityAttestationVerified {
+                        peer_id: from,
+                        did: expected_did,
+                    });
+                }
+                Err(e) => {
+                    tracing::warn!(target: "trust", "⚠️  bind_verified failed for {from}: {e}");
+                }
+            }
+            (direct::ok_response(request_id), None)
+        }
+        Err(e) => {
+            tracing::warn!(target: "trust", "⚠️  Attestation verification failed for {from}: {e}");
+            (direct::error_response(request_id, format!("attestation verification failed: {e}")), None)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1083,4 +1208,7 @@ mod tests {
             assert_eq!(req, decoded, "roundtrip failed for {:?}", req.payload);
         }
     }
+
+
+// ═══════════════════════════════════════════════════════════════
 }

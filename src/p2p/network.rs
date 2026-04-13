@@ -136,6 +136,7 @@ impl P2PNetwork {
             let pending_store = PendingMessageStore::new();
             let resource_pending_store = PendingMessageStore::with_ttl(Duration::from_secs(direct::RESOURCE_PENDING_TTL_SECS));
             let mut mdns_peer_addrs: HashMap<PeerId, Vec<Multiaddr>> = HashMap::new();
+            let mut identity_registry: Option<crate::identity::IdentityRegistry> = Some(crate::identity::IdentityRegistry::new());
 
             // ContributionEngine: created from resource_ad if provided.
             let mut resource_engine = match &resource_ad {
@@ -272,7 +273,7 @@ impl P2PNetwork {
                                 let response = handler::handle_direct_request(
                                     peer, request, &mut crypto, &my_keys,
                                     &mut swarm, &event_tx, &agent_identity,
-                                    engine_ref,
+                                    engine_ref, &mut identity_registry, &signing_key,
                                 );
                                 let _ = swarm.behaviour_mut().direct.send_response(channel, response);
                             }

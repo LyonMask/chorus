@@ -74,6 +74,8 @@ pub enum DirectPayload {
     ResourceReleaseAck { session_id: String, contribution_delta: f64 },
     /// Consumer rejects an offer.
     ResourceReject { request_id: String, reason: crate::resource::RejectReason },
+    /// PeerId↔DID identity attestation (Phase 4).
+    IdentityAttestation { attestation_json: Vec<u8> },
 }
 /// Response to a direct request.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -296,6 +298,14 @@ pub fn ok_response(request_id: u64) -> DirectResponse {
     DirectResponse {
         request_id,
         status: DirectResponseStatus::Ok,
+    }
+}
+
+/// Shorthand: build an error response.
+pub fn error_response(request_id: u64, msg: impl Into<String>) -> DirectResponse {
+    DirectResponse {
+        request_id,
+        status: DirectResponseStatus::Error(msg.into()),
     }
 }
 

@@ -143,6 +143,11 @@ pub enum P2PEvent {
         session_id: String,
         contribution_delta: f64,
     },
+    /// PeerId↔DID binding cryptographically verified (Phase 4).
+    IdentityAttestationVerified {
+        peer_id: PeerId,
+        did: String,
+    },
     /// A resource request failed (no matching provider).
     ResourceRequestFailed {
         peer_id: PeerId,
