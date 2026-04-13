@@ -148,6 +148,8 @@ pub struct TrustScore {
 }
 
 impl TrustScore {
+    /// Weighted composite score: identity×0.2 + endorsement×0.5 + guarantor×0.2 + slash×0.1.
+    /// Then multiplied by recency_weight and clamped to [0.0, 1.0].
     pub fn composite(&self) -> f64 {
         let raw = self.identity_score * 0.2
             + self.endorsement_score * 0.5
@@ -156,12 +158,52 @@ impl TrustScore {
         (raw * self.recency_weight).clamp(0.0, 1.0)
     }
 
+    /// Derive TrustLevel from composite score.
     pub fn level(&self) -> TrustLevel {
         match self.composite() {
             x if x >= 0.8 => TrustLevel::CommunityVerified,
             x if x >= 0.6 => TrustLevel::Guaranteed,
             x if x >= 0.3 => TrustLevel::Cryptographic,
             _ => TrustLevel::Unverified,
+        }
+    }
+
+    /// Build a TrustScore from individual component scores.
+    pub fn from_components(
+        identity: f64,
+        endorsement: f64,
+        guarantor: f64,
+        slash_penalty: f64,
+        recency_weight: f64,
+    ) -> Self {
+        Self {
+            identity_score: identity.clamp(0.0, 1.0),
+            endorsement_score: endorsement.clamp(0.0, 1.0),
+            guarantor_boost: guarantor.clamp(0.0, 1.0),
+            slash_penalty: slash_penalty.clamp(0.0, 1.0),
+            recency_weight: recency_weight.clamp(0.0, 1.0),
+        }
+    }
+
+    /// CRP earnings multiplier based on TrustLevel.
+    /// Unverified: 0.5×, Cryptographic: 1.0×, Guaranteed: 1.2×, CommunityVerified: 1.5×
+    pub fn crp_multiplier(&self) -> f64 {
+        match self.level() {
+            TrustLevel::Unverified => 0.5,
+            TrustLevel::Cryptographic => 1.0,
+            TrustLevel::Guaranteed => 1.2,
+            TrustLevel::CommunityVerified => 1.5,
+        }
+    }
+
+    /// Resource match priority bonus based on TrustLevel.
+    /// Unverified: 0%, Cryptographic: 0%, Guaranteed: 10%, CommunityVerified: 25%
+    pub fn trust_bonus(&self) -> f64 {
+        match self.level() {
+            TrustLevel::Unverified => 0.0,
+            TrustLevel::Cryptographic => 0.0,
+            TrustLevel::Guaranteed => 0.10,
+            TrustLevel::CommunityVerified => 0.25,
         }
     }
 }

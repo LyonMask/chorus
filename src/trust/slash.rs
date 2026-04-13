@@ -26,7 +26,7 @@ pub enum OffenseType {
 }
 
 impl std::fmt::Display for OffenseType {
-    fn fmt(&self, f: &std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::MeasurementFraud => write!(f, "MeasurementFraud"),
             Self::StorageChallengeMissed => write!(f, "StorageChallengeMissed"),

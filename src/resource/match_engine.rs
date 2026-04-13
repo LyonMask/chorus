@@ -60,6 +60,12 @@ pub struct ScoreComponents {
 
     /// Historical reliability score (placeholder, always 0.5).
     pub reliability: f64,
+
+    /// Trust level bonus (0.0, 0.10, or 0.25 based on TrustLevel).
+    pub trust_bonus: f64,
+
+    /// CRP multiplier from TrustLevel (0.5, 1.0, 1.2, or 1.5).
+    pub crp_multiplier: f64,
 }
 
 impl std::fmt::Display for ScoreComponents {
@@ -173,11 +179,14 @@ impl MatchEngine {
                 resource: Self::resource_score(&ad, req, remaining_cpu, remaining_mem),
                 latency: self.latency.score(&ad.agent_id),
                 reliability: self.reliability.score(&ad.agent_id),
+                trust_bonus: 0.0,   // populated by caller using TrustScore
+                crp_multiplier: 1.0, // populated by caller using TrustScore
             };
 
-            let score = W_RESOURCE * components.resource
+            let base_score = W_RESOURCE * components.resource
                 + W_LATENCY * components.latency
                 + W_RELIABILITY * components.reliability;
+            let score = (base_score + components.trust_bonus) * components.crp_multiplier;
 
             results.push(MatchResult {
                 provider_id: ad.agent_id.clone(),
@@ -235,11 +244,14 @@ impl MatchEngine {
             resource: Self::resource_score(my_ad, req, remaining_cpu, remaining_mem),
             latency: self.latency.score(our_agent_id),
             reliability: self.reliability.score(our_agent_id),
+                trust_bonus: 0.0,
+                crp_multiplier: 1.0,
         };
 
-        let score = W_RESOURCE * components.resource
+        let base_score = W_RESOURCE * components.resource
             + W_LATENCY * components.latency
             + W_RELIABILITY * components.reliability;
+        let score = (base_score + components.trust_bonus) * components.crp_multiplier;
 
         Some(MatchResult {
             provider_id: our_agent_id.to_string(),
@@ -553,6 +565,8 @@ mod tests {
             resource: 0.8,
             latency: 0.5,
             reliability: 0.5,
+            trust_bonus: 0.0,
+            crp_multiplier: 1.0,
         };
         let s = sc.to_string();
         assert!(s.contains("resource=0.800"));
@@ -676,4 +690,84 @@ mod tests {
             "mid-decay ad should score moderately, got {}", score
         );
     }
+
+    #[test]
+    fn test_trust_bonus_unverified_no_bonus() {
+        let sc = ScoreComponents {
+            resource: 0.8, latency: 0.5, reliability: 0.5,
+            trust_bonus: 0.0, crp_multiplier: 0.5, // Unverified
+        };
+        // base = 0.8*0.5 + 0.5*0.3 + 0.5*0.2 = 0.65
+        // total = (0.65 + 0.0) * 0.5 = 0.325
+        let base = 0.5 * 0.8 + 0.3 * 0.5 + 0.2 * 0.5; // W_RESOURCE=0.5 etc
+        let total = (base + sc.trust_bonus) * sc.crp_multiplier;
+        assert!((total - 0.325).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_trust_bonus_guaranteed_10_percent() {
+        let sc = ScoreComponents {
+            resource: 0.8, latency: 0.5, reliability: 0.5,
+            trust_bonus: 0.10, crp_multiplier: 1.2, // Guaranteed
+        };
+        let base = 0.5 * 0.8 + 0.3 * 0.5 + 0.2 * 0.5; // 0.65
+        let total = (base + sc.trust_bonus) * sc.crp_multiplier;
+        // (0.65 + 0.10) * 1.2 = 0.90
+        assert!((total - 0.90).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_trust_bonus_community_verified_25_percent() {
+        let sc = ScoreComponents {
+            resource: 0.8, latency: 0.5, reliability: 0.5,
+            trust_bonus: 0.25, crp_multiplier: 1.5, // CommunityVerified
+        };
+        let base = 0.5 * 0.8 + 0.3 * 0.5 + 0.2 * 0.5; // 0.65
+        let total = (base + sc.trust_bonus) * sc.crp_multiplier;
+        // (0.65 + 0.25) * 1.5 = 1.35
+        assert!((total - 1.35).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_cryptographic_no_bonus_base_rate() {
+        let sc = ScoreComponents {
+            resource: 0.8, latency: 0.5, reliability: 0.5,
+            trust_bonus: 0.0, crp_multiplier: 1.0, // Cryptographic
+        };
+        let base = 0.5 * 0.8 + 0.3 * 0.5 + 0.2 * 0.5; // 0.65
+        let total = (base + sc.trust_bonus) * sc.crp_multiplier;
+        // (0.65 + 0.0) * 1.0 = 0.65
+        assert!((total - 0.65).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_trust_sorting_order() {
+        // CommunityVerified should rank above Guaranteed above Cryptographic above Unverified
+        let unverified = ScoreComponents {
+            resource: 0.8, latency: 0.5, reliability: 0.5,
+            trust_bonus: 0.0, crp_multiplier: 0.5,
+        };
+        let crypto = ScoreComponents {
+            resource: 0.8, latency: 0.5, reliability: 0.5,
+            trust_bonus: 0.0, crp_multiplier: 1.0,
+        };
+        let guaranteed = ScoreComponents {
+            resource: 0.8, latency: 0.5, reliability: 0.5,
+            trust_bonus: 0.10, crp_multiplier: 1.2,
+        };
+        let community = ScoreComponents {
+            resource: 0.8, latency: 0.5, reliability: 0.5,
+            trust_bonus: 0.25, crp_multiplier: 1.5,
+        };
+
+        let calc = |sc: &ScoreComponents| -> f64 {
+            let base = 0.5 * sc.resource + 0.3 * sc.latency + 0.2 * sc.reliability;
+            (base + sc.trust_bonus) * sc.crp_multiplier
+        };
+
+        assert!(calc(&community) > calc(&guaranteed));
+        assert!(calc(&guaranteed) > calc(&crypto));
+        assert!(calc(&crypto) > calc(&unverified));
+    }
+
 }
