@@ -62,7 +62,6 @@ required-features = ["tui"]
 
 [[example]]
 name = "headless_demo"
-required-features = ["tui"]
 
 [[example]]
 name = "tui_demo"
