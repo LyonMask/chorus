@@ -743,6 +743,104 @@ mod tests {
         assert!(verify_advertisement(&ad).is_err());
     }
 
+    // ── IdentityRegistry ──
+
+/// A verified mapping between a libp2p PeerId and a did:walkie DID.
+#[derive(Debug, Clone)]
+pub struct PeerDidBinding {
+    /// The did:walkie identifier (e.g. "did:walkie:abc123")
+    pub did: String,
+    /// Ed25519 public key (32 bytes)
+    pub pub_key: Vec<u8>,
+    /// Unix timestamp (ms) when the binding was created
+    pub bound_at: u64,
+}
+
+/// Registry for bidirectional PeerId↔DID bindings.
+///
+/// Maintains two lookup indexes:
+///   peer_id → DID  (used when receiving a message: "who sent this?")
+///   DID → peer_id  (used when sending: "where is this agent?")
+#[derive(Debug, Clone)]
+pub struct IdentityRegistry {
+    peer_to_did: std::collections::HashMap<String, PeerDidBinding>,
+    did_to_peer: std::collections::HashMap<String, String>,
+}
+
+impl Default for IdentityRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl IdentityRegistry {
+    pub fn new() -> Self {
+        Self {
+            peer_to_did: std::collections::HashMap::new(),
+            did_to_peer: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Bind a peer_id to a DID. If the DID was already bound to a different
+    /// peer, the old binding is removed first (reconnection scenario).
+    pub fn bind(&mut self, peer_id: &str, did: &str, pub_key: Vec<u8>) {
+        // Remove old peer→DID if this peer was bound before
+        if let Some(old) = self.peer_to_did.remove(peer_id) {
+            self.did_to_peer.remove(&old.did);
+        }
+        // Remove old DID→peer if this DID was bound to a different peer
+        if let Some(old_peer) = self.did_to_peer.remove(did) {
+            self.peer_to_did.remove(&old_peer);
+        }
+
+        let binding = PeerDidBinding {
+            did: did.to_string(),
+            pub_key,
+            bound_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+        };
+        self.peer_to_did.insert(peer_id.to_string(), binding);
+        self.did_to_peer.insert(did.to_string(), peer_id.to_string());
+    }
+
+    /// Look up DID by peer_id.
+    pub fn did_for_peer(&self, peer_id: &str) -> Option<&str> {
+        self.peer_to_did.get(peer_id).map(|b| b.did.as_str())
+    }
+
+    /// Look up peer_id by DID.
+    pub fn peer_for_did(&self, did: &str) -> Option<&str> {
+        self.did_to_peer.get(did).map(|s| s.as_str())
+    }
+
+    /// Remove a binding by peer_id. Returns `true` if a binding existed.
+    pub fn unbind(&mut self, peer_id: &str) -> bool {
+        if let Some(binding) = self.peer_to_did.remove(peer_id) {
+            self.did_to_peer.remove(&binding.did);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Get the full binding for a peer_id.
+    pub fn get_binding(&self, peer_id: &str) -> Option<&PeerDidBinding> {
+        self.peer_to_did.get(peer_id)
+    }
+
+    /// Number of active bindings.
+    pub fn len(&self) -> usize {
+        self.peer_to_did.len()
+    }
+
+    /// Check if the registry is empty.
+    pub fn is_empty(&self) -> bool {
+        self.peer_to_did.is_empty()
+    }
+}
+
     // ── IdentityRegistry Tests ──
 
     #[test]
@@ -811,7 +909,7 @@ mod tests {
         let binding = registry.get_binding("peer-1").unwrap();
 
         assert_eq!(binding.did, "did:walkie:alice");
-        assert_eq!(binding.public_key, pubkey);
+        assert_eq!(binding.pub_key, pubkey);
         assert!(binding.bound_at > 0);
     }
 }
