@@ -228,6 +228,11 @@ impl WcLedger {
             self.balance += amount;
         }
     }
+
+    /// Get the current WC balance.
+    pub fn balance(&self) -> f64 {
+        self.balance
+    }
 }
 
 #[cfg(test)]
