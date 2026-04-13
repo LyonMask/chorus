@@ -46,6 +46,16 @@ pub enum TrustError {
     UnknownDid,
     /// The peer is not yet verified at the required level.
     InsufficientTrust,
+    /// Not eligible to act as a guarantor.
+    NotEligibleGuarantor,
+    /// Already guaranteeing this node.
+    AlreadyGuaranteed,
+    /// Maximum number of guarantees reached.
+    MaxGuaranteesReached,
+    /// Guarantee certificate has expired.
+    GuaranteeExpired,
+    /// Invalid public key format.
+    InvalidPublicKey,
     /// Generic trust-layer error.
     Other(String),
 }
@@ -60,6 +70,11 @@ impl std::fmt::Display for TrustError {
             Self::PeerIdMismatch => write!(f, "PeerId mismatch"),
             Self::UnknownDid => write!(f, "unknown DID"),
             Self::InsufficientTrust => write!(f, "insufficient trust level"),
+            Self::NotEligibleGuarantor => write!(f, "not eligible to be guarantor"),
+            Self::AlreadyGuaranteed => write!(f, "already guaranteeing this node"),
+            Self::MaxGuaranteesReached => write!(f, "max guarantees reached"),
+            Self::GuaranteeExpired => write!(f, "guarantee certificate expired"),
+            Self::InvalidPublicKey => write!(f, "invalid public key"),
             Self::Other(msg) => write!(f, "{msg}"),
         }
     }

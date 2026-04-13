@@ -321,6 +321,28 @@ pub(crate) fn handle_direct_request(
             let (resp, _next) = handle_identity_attestation(from, &attestation_json, request_id, event_tx, identity_registry, nonce_store);
             resp
         }
+
+        // ── Phase 4.1: Guarantor + Economy stubs ──
+        DirectPayload::GuaranteeRequest { cert_json: _ } => {
+            tracing::info!(target: "trust", "📜 GuaranteeRequest from {from} (NYI — T4.1-1 handler pending)");
+            direct::ok_response(request_id)
+        }
+        DirectPayload::GuaranteeResponse { accepted: _, reason: _ } => {
+            tracing::info!(target: "trust", "📜 GuaranteeResponse from {from}");
+            direct::ok_response(request_id)
+        }
+        DirectPayload::SlashNotice { slash_json: _ } => {
+            tracing::info!(target: "trust", "⚡ SlashNotice from {from} (NYI — T4.1-2)");
+            direct::ok_response(request_id)
+        }
+        DirectPayload::PaymentRequest { payment_request_json: _ } => {
+            tracing::info!(target: "trust", "💰 PaymentRequest from {from} (NYI — T4.1-4)");
+            direct::ok_response(request_id)
+        }
+        DirectPayload::PaymentResponse { payment_response_json: _ } => {
+            tracing::info!(target: "trust", "💰 PaymentResponse from {from} (NYI — T4.1-4)");
+            direct::ok_response(request_id)
+        }
     }
 }
 
