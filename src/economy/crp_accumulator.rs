@@ -351,7 +351,7 @@ mod tests {
         let mut acc = CrpAccumulator::new();
         acc.max_samples = 3;
 
-        for i in 0..5 {
+        for _i in 0..5 {
             acc.add_sample(cpu_sample(3_600_000, 1.0));
         }
 

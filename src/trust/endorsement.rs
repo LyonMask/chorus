@@ -255,7 +255,7 @@ mod tests {
         assert!(m.duration_ms() >= 1990); // allow 10ms slack
         // expected = 0.5 × 2000ms = 1000 CPU·ms
         let expected = m.expected_cpu_ms();
-        assert!(expected >= 990 && expected <= 1010, "expected ~1000, got {expected}");
+        assert!((990..=1010).contains(&expected), "expected ~1000, got {expected}");
     }
 
     #[test]

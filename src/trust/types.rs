@@ -18,12 +18,6 @@ pub enum TrustLevel {
     CommunityVerified,
 }
 
-impl Default for TrustLevel {
-    fn default() -> Self {
-        Self::Unverified
-    }
-}
-
 impl std::fmt::Display for TrustLevel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

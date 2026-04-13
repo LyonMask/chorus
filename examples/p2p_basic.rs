@@ -210,6 +210,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
             P2PEvent::ResourceRequestFailed { peer_id, reason } => {
                 println!("❌ Resource request failed {peer_id}: {reason}");
             }
+            P2PEvent::IdentityAttestationVerified { peer_id, did } => {
+                println!("🔐 Identity attestation verified {peer_id}: {did}");
+            }
         }
     }
 

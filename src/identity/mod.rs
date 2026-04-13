@@ -261,10 +261,8 @@ impl IdentityBuilder {
     pub fn build_with_key(self, signing_key: &ed25519_dalek::SigningKey) -> Result<AgentIdentity> {
         let pubkey_bytes = signing_key.verifying_key().to_bytes();
         let agent_id = did_from_pubkey(&pubkey_bytes);
-        let created_at = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
+        // Deterministic timestamp derived from public key (for reproducible tests)
+        let created_at = u64::from_be_bytes(pubkey_bytes[24..32].try_into().unwrap_or([0u8; 8]));
 
         let identity = AgentIdentity {
             agent_id,
