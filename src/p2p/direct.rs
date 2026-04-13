@@ -76,6 +76,16 @@ pub enum DirectPayload {
     ResourceReject { request_id: String, reason: crate::resource::RejectReason },
     /// PeerId↔DID identity attestation (Phase 4).
     IdentityAttestation { attestation_json: Vec<u8> },
+    /// Guarantee request — ask a guarantor to vouch for us (Phase 4.1).
+    GuaranteeRequest { cert_json: Vec<u8> },
+    /// Guarantee response — guarantor confirms or rejects (Phase 4.1).
+    GuaranteeResponse { accepted: bool, reason: String },
+    /// Slash notice — broadcast punishment notification (Phase 4.1).
+    SlashNotice { slash_json: Vec<u8> },
+    /// Payment request from provider to consumer (Phase 4.1).
+    PaymentRequest { payment_request_json: Vec<u8> },
+    /// Payment response from consumer to provider (Phase 4.1).
+    PaymentResponse { payment_response_json: Vec<u8> },
 }
 /// Response to a direct request.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]

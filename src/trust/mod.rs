@@ -16,3 +16,5 @@
 pub mod types;
 pub mod peer_binding;
 pub mod endorsement;
+pub mod guarantor;
+pub mod rate_limit;
