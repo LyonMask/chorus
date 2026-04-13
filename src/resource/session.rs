@@ -226,6 +226,39 @@ impl ResourceSessionManager {
         let rand_hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
         format!("{consumer}_{provider}_{now}_{rand_hex}")
     }
+
+    /// Validate that a session_id follows the expected format:
+    /// `{consumer}_{provider}_{timestamp_ms}_{8_hex_random}`.
+    ///
+    /// Returns the parsed consumer and provider if valid, None otherwise.
+    /// This prevents forged or malformed session IDs from being accepted.
+    pub fn validate_session_id(session_id: &str) -> Option<(&str, &str)> {
+        // Format: consumer_provider_timestamp_random
+        // We need at least 3 underscores (4 parts), last part is 8 hex chars
+        let parts: Vec<&str> = session_id.rsplitn(4, '_').collect();
+        if parts.len() != 4 {
+            return None;
+        }
+        // parts[0] = random_hex, parts[1] = timestamp, parts[2] = provider, parts[3] = consumer
+        let random_hex = parts[0];
+        let timestamp_str = parts[1];
+        let provider = parts[2];
+        let consumer = parts[3];
+
+        // Validate random hex (8 chars)
+        if random_hex.len() != 8 || !random_hex.chars().all(|c| c.is_ascii_hexdigit()) {
+            return None;
+        }
+        // Validate timestamp (numeric, reasonable range: 2020-2100 epoch ms)
+        if let Ok(ts) = timestamp_str.parse::<u64>() {
+            let now = now_ms();
+            // Reject timestamps more than 1 hour in the future or before 2020
+            if ts > 1_577_880_000_000 && ts <= now + 3_600_000 {
+                return Some((consumer, provider));
+            }
+        }
+        None
+    }
 }
 
 #[cfg(test)]
