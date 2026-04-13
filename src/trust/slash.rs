@@ -148,7 +148,7 @@ impl SlashLedger {
     /// - After 30-day cooldown → reset to First
     pub fn check_strike_count(&self, did: &str) -> StrikeLevel {
         let active_strikes = self.active_strikes(did);
-        let max_strikes: u32 = economy_params::MAX_PENALTY_STRIKES;
+        let _max_strikes: u32 = economy_params::MAX_PENALTY_STRIKES;
 
         if active_strikes.is_empty() {
             return StrikeLevel::First;
@@ -222,7 +222,7 @@ impl SlashLedger {
     fn prune(&mut self) {
         if self.records.len() > MAX_SLASH_RECORDS {
             // Remove expired records first
-            let before = self.records.len();
+            let _before = self.records.len();
             self.records.retain(|r| !r.is_expired());
             // If still over limit, remove oldest
             while self.records.len() > MAX_SLASH_RECORDS {
@@ -241,7 +241,7 @@ impl SlashLedger {
 mod tests {
     use super::*;
 
-    fn make_ledger() -> WcLedger {
+    fn _make_ledger() -> WcLedger {
         WcLedger::with_balance(100.0)
     }
 
@@ -321,7 +321,7 @@ mod tests {
     fn test_different_dids_independent() {
         let mut slash = SlashLedger::new();
         let mut wc1 = make_crp_ledger();
-        let mut wc2 = make_crp_ledger();
+        let _wc2 = make_crp_ledger();
 
         slash.slash("did:walkie:alice", OffenseType::SpamAbuse, &fake_evidence(), &mut wc1);
         // Bob should still be at First
@@ -375,18 +375,18 @@ mod tests {
     #[test]
     fn test_prune_limit() {
         let mut slash = SlashLedger::new();
-        // Manually push expired records to trigger pruning
+        let mut wc = make_crp_ledger();
+        // Use slash() which calls prune() after each push
         for i in 0..1100 {
-            let mut record = SlashRecord::new(
+            // Each slash targets a different DID to avoid strike escalation
+            slash.slash(
                 &format!("did:walkie:node-{i}"),
                 OffenseType::SpamAbuse,
-                StrikeLevel::First,
                 &fake_evidence(),
+                &mut wc,
             );
-            record.timestamp_ms = 0; // force expiry
-            slash.records.push(record);
         }
-        // Should have been pruned
+        // prune() should keep len <= MAX_SLASH_RECORDS
         assert!(slash.len() <= MAX_SLASH_RECORDS);
     }
 
