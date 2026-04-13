@@ -437,32 +437,39 @@ pub(crate) fn handle_resource_offer_incoming(
 /// Activates the pending session and emits `ResourceSessionStarted`.
 pub(crate) fn handle_resource_accept(
     from: PeerId,
-    _session_id: String,
+    session_id: String,
     request_id: u64,
     event_tx: &mpsc::UnboundedSender<P2PEvent>,
     engine: &mut ContributionEngine,
 ) -> DirectResponse {
-    tracing::info!(target: "resource", "✅ ResourceAccept from {from}: session={_session_id}");
+    tracing::info!(target: "resource", "✅ ResourceAccept from {from}: session={session_id}");
 
-    let pending = engine.sessions.list_by_status(crate::resource::SessionStatus::Pending);
-    let mut found_sid = String::new();
-    let mut expires_at = 0u64;
-
-    for session in pending {
-        if session.consumer == from.to_string() {
-            found_sid = session.session_id.clone();
-            expires_at = session.ends_at;
-            break;
+    // Look up the pending session by session_id (not by consumer peer ID).
+    // This fixes a bug where multi-session scenarios would pick the wrong one.
+    let session = engine.sessions.get(&session_id);
+    let (found_sid, expires_at) = if let Some(s) = session {
+        if s.status != crate::resource::SessionStatus::Pending {
+            tracing::warn!(target: "resource", "✅ session {session_id} is not pending (status={:?})", s.status);
+            return DirectResponse {
+                request_id,
+                status: DirectResponseStatus::Error("session not pending".into()),
+            };
         }
-    }
-
-    if found_sid.is_empty() {
-        tracing::warn!(target: "resource", "✅ no pending session found for {from}");
+        if s.consumer != from.to_string() {
+            tracing::warn!(target: "resource", "✅ session {session_id} belongs to {}, not {from}", s.consumer);
+            return DirectResponse {
+                request_id,
+                status: DirectResponseStatus::Error("session belongs to different consumer".into()),
+            };
+        }
+        (session_id.clone(), s.ends_at)
+    } else {
+        tracing::warn!(target: "resource", "✅ no pending session found for id={session_id}");
         return DirectResponse {
             request_id,
             status: DirectResponseStatus::Error("no pending session".into()),
         };
-    }
+    };
 
     if !engine.accept_session(&found_sid) {
         tracing::warn!(target: "resource", "✅ failed to activate session {found_sid}");
@@ -809,11 +816,65 @@ mod tests {
 
         let (_response, _offer_req) = handle_resource_request(from, request, 1, &tx, &mut engine);
 
-        let response = handle_resource_accept(from, "accept-x".into(), 2, &tx, &mut engine);
+        // Get the actual session_id created by the engine
+        let pending = engine.sessions.list_by_status(crate::resource::SessionStatus::Pending);
+        assert_eq!(pending.len(), 1);
+        let real_sid = pending[0].session_id.clone();
+
+        let response = handle_resource_accept(from, real_sid, 2, &tx, &mut engine);
         assert!(matches!(response.status, DirectResponseStatus::Ok));
 
         let active = engine.sessions.list_by_status(crate::resource::SessionStatus::Active);
         assert_eq!(active.len(), 1);
+    }
+
+    #[test]
+    fn test_handle_resource_accept_wrong_session_id() {
+        let mut engine = make_provider_engine();
+        let mut request = make_request();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let from = PeerId::random();
+        request.consumer_id = from.to_string();
+
+        let (_response, _offer_req) = handle_resource_request(from, request, 1, &tx, &mut engine);
+
+        // Try to accept with a non-existent session_id
+        let response = handle_resource_accept(from, "nonexistent-session".into(), 2, &tx, &mut engine);
+        assert!(matches!(response.status, DirectResponseStatus::Error(_)));
+    }
+
+    #[test]
+    fn test_handle_resource_accept_multi_session() {
+        // Two consumers each get a session, accept by specific session_id
+        let mut engine = make_provider_engine();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let from_a = PeerId::random();
+        let from_b = PeerId::random();
+
+        let mut req_a = make_request();
+        req_a.consumer_id = from_a.to_string();
+        let mut req_b = make_request();
+        req_b.consumer_id = from_b.to_string();
+
+        handle_resource_request(from_a, req_a, 1, &tx, &mut engine);
+        handle_resource_request(from_b, req_b, 2, &tx, &mut engine);
+
+        let pending = engine.sessions.list_by_status(crate::resource::SessionStatus::Pending);
+        assert_eq!(pending.len(), 2);
+
+        // Accept only B's session
+        let sid_b = pending.iter().find(|s| s.consumer == from_b.to_string()).unwrap().session_id.clone();
+        let response = handle_resource_accept(from_b, sid_b, 3, &tx, &mut engine);
+        assert!(matches!(response.status, DirectResponseStatus::Ok));
+
+        // A's session should still be pending
+        let still_pending = engine.sessions.list_by_status(crate::resource::SessionStatus::Pending);
+        assert_eq!(still_pending.len(), 1);
+        assert_eq!(still_pending[0].consumer, from_a.to_string());
+
+        let active = engine.sessions.list_by_status(crate::resource::SessionStatus::Active);
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].consumer, from_b.to_string());
     }
 
     #[test]
