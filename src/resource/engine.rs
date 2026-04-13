@@ -29,25 +29,25 @@ pub struct ContributionEngine {
     pub agent_id: String,
 
     /// Our own resource advertisement.
-    pub my_ad: Option<ResourceAdvertisement>,
+    pub(crate) my_ad: Option<ResourceAdvertisement>,
 
     /// Known resources from other nodes.
-    pub table: ResourceTable,
+    pub(crate) table: ResourceTable,
 
     /// Session manager for allocations we provide or consume.
-    pub sessions: ResourceSessionManager,
+    pub(crate) sessions: ResourceSessionManager,
 
     /// Local contribution ledger.
-    pub ledger: ContributionLedger,
+    pub(crate) ledger: ContributionLedger,
 
     /// PoR verifier for storage audits.
-    pub por_verifier: PoRVerifier,
+    pub(crate) por_verifier: PoRVerifier,
 
     /// Backoff tracker for outbound requests.
-    pub backoff: RequestBackoff,
+    pub(crate) backoff: RequestBackoff,
 
     /// Pending storage challenges we've issued (challenge_id → StorageChallenge).
-    pub pending_challenges: std::collections::HashMap<String, StorageChallenge>,
+    pub(crate) pending_challenges: std::collections::HashMap<String, StorageChallenge>,
 }
 
 impl ContributionEngine {
@@ -330,6 +330,7 @@ mod tests {
             storage_offer: 0,
             features: vec![],
             signature: Vec::new(),
+            signing_pubkey: Vec::new(),
         }
     }
 
