@@ -10,6 +10,8 @@
 //! 5. Both parties record to their local ContributionLedger
 //! 6. Periodic random audits verify storage contributions
 
+use std::sync::Arc;
+
 use crate::resource::backoff::RequestBackoff;
 use crate::resource::proof::*;
 use crate::resource::session::{ResourceSession, ResourceSessionManager};
@@ -44,10 +46,13 @@ pub struct ContributionEngine {
     pub(crate) por_verifier: PoRVerifier,
 
     /// Backoff tracker for outbound requests.
+    #[allow(dead_code)]
     pub(crate) backoff: RequestBackoff,
 
     /// Pending storage challenges we've issued (challenge_id → StorageChallenge).
     pub(crate) pending_challenges: std::collections::HashMap<String, StorageChallenge>,
+    /// Ed25519 signing key for re-signing resource ads after bump.
+    pub(crate) signing_key: Option<Arc<ed25519_dalek::SigningKey>>,
 }
 
 impl ContributionEngine {
@@ -62,6 +67,7 @@ impl ContributionEngine {
             por_verifier: PoRVerifier::new(),
             backoff: RequestBackoff::new(),
             pending_challenges: std::collections::HashMap::new(),
+            signing_key: None,
         }
     }
 
@@ -70,7 +76,11 @@ impl ContributionEngine {
     /// Declare our own resources. Returns the advertisement for broadcasting.
     pub fn declare_resources(&mut self, ad: ResourceAdvertisement) -> ResourceAdvertisement {
         let mut ad = ad;
-        ad.bump();
+        ad.bump();  // bump sequence + timestamp FIRST
+        // Then sign the final payload (so signature covers bumped values)
+        if let Some(ref key) = self.signing_key {
+            crate::identity::sign_advertisement(&mut ad, key);
+        }
         self.my_ad = Some(ad.clone());
         ad
     }

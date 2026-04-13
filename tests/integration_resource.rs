@@ -14,19 +14,24 @@ use walkie_talkie_core::p2p::{
     direct::DirectResponseStatus, P2PConfig, P2PEvent, P2PNetwork,
 };
 use walkie_talkie_core::resource::{ResourceAdvertisement, ResourceRequest, ResourceSpec};
+use walkie_talkie_core::identity::sign_advertisement;
+use ed25519_dalek::SigningKey;
 
-/// Helper: create a P2PConfig for testing.
+/// Helper: create a P2PConfig for testing (with signing key for ad signatures).
 fn test_config(port: u16) -> P2PConfig {
+    let seed = [42u8; 32];
+    let signing_key = std::sync::Arc::new(SigningKey::from_bytes(&seed));
     P2PConfig {
         listen_on: vec![format!("/ip4/127.0.0.1/tcp/{port}")],
         ping_interval_secs: 2,
         ping_timeout_secs: 3,
         idle_timeout_secs: 30,
+        signing_key: Some(signing_key),
         ..Default::default()
     }
 }
 
-/// Helper: build a ResourceAdvertisement for a provider node.
+/// Helper: build a signed ResourceAdvertisement for a provider node.
 fn test_ad(agent_id: &str, cpu: f32, mem_mb: u64) -> ResourceAdvertisement {
     let mut ad = ResourceAdvertisement::new(
         agent_id.to_string(),
@@ -40,6 +45,10 @@ fn test_ad(agent_id: &str, cpu: f32, mem_mb: u64) -> ResourceAdvertisement {
     ad.cpu_offer = cpu;
     ad.memory_offer_mb = mem_mb;
     ad.sequence = 1;
+    // Sign the ad — required by validate_with_signature() (S2 fix).
+    let seed = [42u8; 32];
+    let signing_key = SigningKey::from_bytes(&seed);
+    sign_advertisement(&mut ad, &signing_key);
     ad
 }
 

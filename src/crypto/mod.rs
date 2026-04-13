@@ -11,7 +11,6 @@ use x25519_dalek::{PublicKey, SharedSecret, StaticSecret};
 /// Encrypted message format: nonce (12 bytes) || ciphertext+tag
 pub const NONCE_SIZE: usize = 12;
 /// Nonce layout: salt(4) || counter(8).
-
 /// Maximum number of messages per session before mandatory key rotation.
 const MAX_MESSAGES_PER_SESSION: u64 = 100_000;
 

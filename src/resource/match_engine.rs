@@ -400,7 +400,7 @@ mod tests {
     #[test]
     fn test_find_providers_all_match() {
         let engine = MatchEngine::new();
-        let mut table = populated_table();
+        let table = populated_table();
         let sessions = ResourceSessionManager::new();
         let req = make_request(0.05, 256);
 
@@ -416,7 +416,7 @@ mod tests {
     #[test]
     fn test_find_providers_partial_match() {
         let engine = MatchEngine::new();
-        let mut table = populated_table();
+        let table = populated_table();
         let sessions = ResourceSessionManager::new();
 
         // Only "big" can satisfy 50% CPU + 4GB.
@@ -429,7 +429,7 @@ mod tests {
     #[test]
     fn test_find_providers_no_match() {
         let engine = MatchEngine::new();
-        let mut table = populated_table();
+        let table = populated_table();
         let sessions = ResourceSessionManager::new();
 
         // Impossible request.
@@ -441,7 +441,7 @@ mod tests {
     #[test]
     fn test_find_providers_with_existing_allocations() {
         let engine = MatchEngine::new();
-        let mut table = populated_table();
+        let table = populated_table();
         let mut sessions = ResourceSessionManager::new();
 
         // Allocate most of "big"'s resources.
@@ -457,7 +457,7 @@ mod tests {
     #[test]
     fn test_find_best_returns_highest() {
         let engine = MatchEngine::new();
-        let mut table = populated_table();
+        let table = populated_table();
         let sessions = ResourceSessionManager::new();
         let req = make_request(0.05, 256);
 
@@ -469,7 +469,7 @@ mod tests {
     #[test]
     fn test_find_best_none_when_no_match() {
         let engine = MatchEngine::new();
-        let mut table = populated_table();
+        let table = populated_table();
         let sessions = ResourceSessionManager::new();
         let req = make_request(1.0, 100_000);
 
@@ -564,7 +564,7 @@ mod tests {
     #[test]
     fn test_total_score_is_weighted_average() {
         let engine = MatchEngine::new();
-        let mut table = populated_table();
+        let table = populated_table();
         let sessions = ResourceSessionManager::new();
         let req = make_request(0.05, 256);
 
@@ -595,7 +595,7 @@ mod tests {
     #[test]
     fn test_concurrent_requests_dont_double_allocate() {
         let engine = MatchEngine::new();
-        let mut table = populated_table();
+        let table = populated_table();
         let mut sessions = ResourceSessionManager::new();
 
         // "big" has 0.8 CPU. Two requests of 0.5 each should only fit one.

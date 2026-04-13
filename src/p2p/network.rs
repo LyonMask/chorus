@@ -126,8 +126,9 @@ impl P2PNetwork {
         let auto_kx = config.auto_key_exchange;
         let agent_identity = config.agent_identity.clone();
 
-        // Extract resource_ad before moving config
+        // Extract resource_ad and signing_key before moving config
         let resource_ad = config.resource_ad;
+        let signing_key = config.signing_key.clone();
 
         // ── Swarm event loop ──
         tokio::spawn(async move {
@@ -140,6 +141,7 @@ impl P2PNetwork {
             let mut resource_engine = match &resource_ad {
                 Some(ad) => {
                     let mut engine = ContributionEngine::new(ad.agent_id.clone());
+                    engine.signing_key = signing_key.clone();
                     engine.declare_resources(ad.clone());
                     tracing::info!(target: "resource", "📦 ContributionEngine initialised for '{}'", ad.agent_id);
                     Some(engine)
@@ -262,7 +264,9 @@ impl P2PNetwork {
                                 // We always need a ContributionEngine for the handler,
                                 // even if resource_ad was not configured (engine is a no-op).
                                 let engine_ref = resource_engine.get_or_insert_with(|| {
-                                    ContributionEngine::new(String::new())
+                                    let mut e = ContributionEngine::new(String::new());
+                                    e.signing_key = signing_key.clone();
+                                    e
                                 });
 
                                 let response = handler::handle_direct_request(
@@ -525,7 +529,9 @@ impl P2PNetwork {
                                         .map_err(|e| anyhow::anyhow!("invalid resource ad: {e}"))?;
 
                                     let engine = resource_engine.get_or_insert_with(|| {
-                                        ContributionEngine::new(ad.agent_id.clone())
+                                        let mut e = ContributionEngine::new(ad.agent_id.clone());
+                                        e.signing_key = signing_key.clone();
+                                        e
                                     });
                                     let declared = engine.declare_resources(ad.clone());
 

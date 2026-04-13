@@ -836,6 +836,7 @@ impl IdentityRegistry {
     }
 
     /// Check if the registry is empty.
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.peer_to_did.is_empty()
     }
