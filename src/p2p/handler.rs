@@ -460,6 +460,40 @@ pub(crate) fn handle_resource_accept(
 ) -> DirectResponse {
     tracing::info!(target: "resource", "✅ ResourceAccept from {from}: session={session_id}");
 
+    // A5: Validate session_id format to prevent forged/malformed IDs
+    if let Some((sid_consumer, sid_provider)) =
+        crate::resource::ResourceSessionManager::validate_session_id(&session_id)
+    {
+        // Sanity check: the consumer in the session_id should match the sender
+        if sid_consumer != from.to_string() {
+            tracing::warn!(
+                target: "resource",
+                "✅ session_id consumer '{sid_consumer}' doesn't match sender {from}"
+            );
+            return DirectResponse {
+                request_id,
+                status: DirectResponseStatus::Error("session_id consumer mismatch".into()),
+            };
+        }
+        // Provider should match our agent_id
+        if sid_provider != engine.agent_id {
+            tracing::warn!(
+                target: "resource",
+                "✅ session_id provider '{sid_provider}' doesn't match our agent_id"
+            );
+            return DirectResponse {
+                request_id,
+                status: DirectResponseStatus::Error("session_id provider mismatch".into()),
+            };
+        }
+    } else {
+        tracing::warn!(target: "resource", "✅ malformed session_id: {session_id}");
+        return DirectResponse {
+            request_id,
+            status: DirectResponseStatus::Error("malformed session_id".into()),
+        };
+    }
+
     // Look up the pending session by session_id (not by consumer peer ID).
     // This fixes a bug where multi-session scenarios would pick the wrong one.
     let session = engine.sessions.get(&session_id);
@@ -891,8 +925,53 @@ mod tests {
 
         let (_response, _offer_req) = handle_resource_request(from, request, 1, &tx, &mut engine);
 
-        // Try to accept with a non-existent session_id
-        let response = handle_resource_accept(from, "nonexistent-session".into(), 2, &tx, &mut engine);
+        // Try to accept with a non-existent session_id (but valid format)
+        let response = handle_resource_accept(
+            from,
+            format!("{}___provider_{}", from, crate::resource::now_ms()),
+            2, &tx, &mut engine
+        );
+        assert!(matches!(response.status, DirectResponseStatus::Error(_)));
+    }
+
+    #[test]
+    fn test_handle_resource_accept_malformed_session_id() {
+        let mut engine = make_provider_engine();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let from = PeerId::random();
+
+        // Completely malformed session_id
+        let response = handle_resource_accept(from, "not-a-valid-session-id".into(), 2, &tx, &mut engine);
+        assert!(matches!(response.status, DirectResponseStatus::Error(_)));
+
+        // Missing random hex part
+        let response = handle_resource_accept(
+            from,
+            format!("{}__provider_{}", from, crate::resource::now_ms()),
+            3, &tx, &mut engine
+        );
+        assert!(matches!(response.status, DirectResponseStatus::Error(_)));
+    }
+
+    #[test]
+    fn test_handle_resource_accept_consumer_mismatch() {
+        let mut engine = make_provider_engine();
+        let mut request = make_request();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let from = PeerId::random();
+        request.consumer_id = from.to_string();
+
+        let (_response, _offer_req) = handle_resource_request(from, request, 1, &tx, &mut engine);
+
+        // Get real session_id but change the consumer prefix
+        let real_sid = engine.sessions.list_by_status(crate::resource::SessionStatus::Pending)[0]
+            .session_id.clone();
+        let attacker = PeerId::random();
+        // Replace the consumer part with the attacker's peer id
+        let forged_sid = real_sid.replacen(&from.to_string(), &attacker.to_string(), 1);
+        assert_ne!(forged_sid, real_sid, "should have changed the consumer");
+
+        let response = handle_resource_accept(attacker, forged_sid, 2, &tx, &mut engine);
         assert!(matches!(response.status, DirectResponseStatus::Error(_)));
     }
 

@@ -436,23 +436,28 @@ impl P2PNetwork {
                                 let _ = reply.send(result);
                             }
 
-                            // BroadcastStructured: stays on Gossipsub
+                            // BroadcastStructured: send encrypted via Direct channel to each connected peer
                             Some(P2PCommand::BroadcastStructured { message, reply }) => {
                                 let result = (|| -> anyhow::Result<()> {
                                     let plaintext = message.to_json_bytes()?;
                                     let peers: Vec<PeerId> = swarm.connected_peers().copied().collect();
+                                    let mut sent = 0usize;
                                     for peer in &peers {
                                         if peer == &our_peer_id { continue; }
                                         let peer_str = peer.to_string();
                                         if crypto.has_session(&peer_str) {
                                             if let Ok(ciphertext) = crypto.encrypt_for(&peer_str, &plaintext) {
-                                                let envelope = CryptoEnvelope::Encrypted { ciphertext };
-                                                if let Ok(bytes) = serde_json::to_vec(&envelope) {
-                                                    let _ = swarm.behaviour_mut().gossipsub.publish(wt_topic(), bytes);
-                                                }
+                                                let request = direct::encrypted_request(ciphertext);
+                                                swarm.behaviour_mut().direct.send_request(peer, request);
+                                                sent += 1;
                                             }
                                         }
                                     }
+                                    tracing::debug!(
+                                        target: "p2p",
+                                        "📢 BroadcastStructured sent to {sent} of {} connected peers",
+                                        peers.len()
+                                    );
                                     Ok(())
                                 })();
                                 let _ = reply.send(result);
