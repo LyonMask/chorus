@@ -157,6 +157,7 @@ mod tests {
 
     fn make_request(min_cpu: f32, min_mem: u64) -> ResourceRequest {
         ResourceRequest {
+            request_id: String::new(),
             consumer_id: "did:walkie:consumer".to_string(),
             min_cpu,
             min_memory_mb: min_mem,
@@ -165,6 +166,7 @@ mod tests {
             required_features: vec![],
             duration_ms: 60_000,
             priority: 75,
+            expires_at: 0,
         }
     }
 
@@ -259,6 +261,7 @@ mod tests {
         table.update(ad);
 
         let req = ResourceRequest {
+            request_id: String::new(),
             consumer_id: "consumer".to_string(),
             min_cpu: 0.1,
             min_memory_mb: 0,
@@ -267,6 +270,7 @@ mod tests {
             required_features: vec!["gpu".to_string()],
             duration_ms: 60_000,
             priority: 75,
+            expires_at: 0,
         };
 
         let candidates = table.find_candidates(&req);

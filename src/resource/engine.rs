@@ -371,6 +371,7 @@ mod tests {
 
         // Find providers.
         let req = ResourceRequest {
+            request_id: String::new(),
             consumer_id: "did:walkie:consumer".into(),
             min_cpu: 0.05,
             min_memory_mb: 256,
@@ -379,6 +380,7 @@ mod tests {
             required_features: vec![],
             duration_ms: 60_000,
             priority: 75,
+            expires_at: 0,
         };
 
         let candidates = engine.find_providers(&req);

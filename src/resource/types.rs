@@ -242,6 +242,10 @@ impl std::error::Error for ResourceValidationError {}
 /// A resource request from a consumer.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ResourceRequest {
+    /// Unique request ID (UUID v4 format).
+    #[serde(default)]
+    pub request_id: String,
+
     /// Requester's DID.
     pub consumer_id: String,
 
@@ -265,11 +269,16 @@ pub struct ResourceRequest {
 
     /// Request priority (0 = lowest, 255 = highest).
     pub priority: u8,
+
+    /// Request expiry timestamp (ms since epoch). 0 = no expiry.
+    #[serde(default)]
+    pub expires_at: u64,
 }
 
 impl ResourceRequest {
     pub fn new(consumer_id: String) -> Self {
         Self {
+            request_id: String::new(),
             consumer_id,
             min_cpu: 0.0,
             min_memory_mb: 0,
@@ -278,6 +287,42 @@ impl ResourceRequest {
             required_features: Vec::new(),
             duration_ms: 60_000,
             priority: 75,
+            expires_at: 0,
+        }
+    }
+
+    /// Check if this request has expired.
+    pub fn is_expired(&self) -> bool {
+        if self.expires_at == 0 {
+            return false;
+        }
+        now_ms() > self.expires_at
+    }
+}
+
+/// Reason for rejecting a resource offer.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum RejectReason {
+    /// Consumer found a better offer from another provider.
+    BetterOffer,
+    /// Consumer no longer needs the resources.
+    Cancelled,
+    /// Offer terms are unacceptable (e.g. too few resources).
+    Unsatisfactory,
+    /// Offer has expired.
+    Expired,
+    /// Custom reason.
+    Other(String),
+}
+
+impl std::fmt::Display for RejectReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::BetterOffer => write!(f, "better offer found"),
+            Self::Cancelled => write!(f, "request cancelled"),
+            Self::Unsatisfactory => write!(f, "unsatisfactory terms"),
+            Self::Expired => write!(f, "offer expired"),
+            Self::Other(s) => write!(f, "{s}"),
         }
     }
 }

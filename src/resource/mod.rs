@@ -19,6 +19,7 @@ mod session;
 mod proof;
 mod backoff;
 mod engine;
+pub mod match_engine;
 pub mod economy_params;
 
 pub use types::*;
@@ -27,3 +28,4 @@ pub use session::ResourceSessionManager;
 pub use proof::{BandwidthReceipt, PoRVerifier, StorageChallenge, StorageProof, WorkReceipt};
 pub use backoff::RequestBackoff;
 pub use engine::{ContributionEngine, MaintenanceReport};
+pub use match_engine::{MatchEngine, MatchResult, ScoreComponents, LatencyTracker, ReliabilityTracker, RESERVATION_TTL_MS};
