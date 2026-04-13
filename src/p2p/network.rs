@@ -743,6 +743,18 @@ impl P2PNetwork {
         rx.await?
     }
 
+    /// Send a pre-built DirectRequest to a peer via Direct channel.
+    /// If peer is offline, message is queued for delivery on reconnect.
+    pub async fn send_direct_request(
+        &self,
+        peer_id: PeerId,
+        request: crate::p2p::direct::DirectRequest,
+    ) -> anyhow::Result<()> {
+        let (reply, rx) = oneshot::channel();
+        self.cmd_tx.send(P2PCommand::SendDirect { peer_id, request, reply })?;
+        rx.await?
+    }
+
     pub fn shutdown(&self) -> anyhow::Result<()> {
         self.cmd_tx.send(P2PCommand::Shutdown)?;
         Ok(())
