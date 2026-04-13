@@ -337,6 +337,23 @@ pub(crate) fn handle_resource_request(
         request.min_memory_mb,
     );
 
+    // Reject expired requests (A4: prevents processing stale forwarded requests)
+    let now = crate::resource::now_ms();
+    if request.expires_at > 0 && now >= request.expires_at {
+        tracing::warn!(
+            target: "resource",
+            "📦 rejecting expired request from {from}: expires_at={}, now={}",
+            request.expires_at, now
+        );
+        return (
+            DirectResponse {
+                request_id,
+                status: DirectResponseStatus::Error("request expired".into()),
+            },
+            None,
+        );
+    }
+
     // Check if our ad satisfies the request
     let offer = if let Some(ref ad) = engine.my_ad {
         if !ad.satisfies(&request) {
@@ -773,6 +790,42 @@ mod tests {
     }
 
     #[test]
+    fn test_handle_resource_request_expired() {
+        let mut engine = make_provider_engine();
+        let mut request = make_request();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let from = PeerId::random();
+
+        // Set expires_at in the past
+        request.expires_at = crate::resource::now_ms() - 1000;
+        request.consumer_id = from.to_string();
+
+        let (_response, offer_req) = handle_resource_request(from, request, 1, &tx, &mut engine);
+        assert!(matches!(response.status, DirectResponseStatus::Error(_)));
+        assert!(offer_req.is_none(), "expired request should not produce an offer");
+
+        // Verify no session was created
+        let pending = engine.sessions.list_by_status(crate::resource::SessionStatus::Pending);
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn test_handle_resource_request_no_expiry() {
+        let mut engine = make_provider_engine();
+        let mut request = make_request();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let from = PeerId::random();
+
+        // expires_at = 0 means no expiry (should be accepted)
+        request.expires_at = 0;
+        request.consumer_id = from.to_string();
+
+        let (_response, offer_req) = handle_resource_request(from, request, 1, &tx, &mut engine);
+        // Should succeed (provider has ad configured)
+        assert!(offer_req.is_some());
+    }
+
+    #[test]
     fn test_handle_resource_request_no_match() {
         let mut engine = ContributionEngine::new("did:walkie:provider".into());
         let request = make_request();
@@ -886,7 +939,11 @@ mod tests {
         request.consumer_id = from.to_string();
 
         let (_response, _offer_req) = handle_resource_request(from, request.clone(), 1, &tx, &mut engine);
-        handle_resource_accept(from, "accept-x".into(), 2, &tx, &mut engine);
+        // Get the actual session_id created by handle_resource_request
+        let pending = engine.sessions.list_by_status(crate::resource::SessionStatus::Pending);
+        assert_eq!(pending.len(), 1);
+        let session_id = pending[0].session_id.clone();
+        handle_resource_accept(from, session_id, 2, &tx, &mut engine);
 
         let active = engine.sessions.list_by_status(crate::resource::SessionStatus::Active);
         assert_eq!(active.len(), 1);
