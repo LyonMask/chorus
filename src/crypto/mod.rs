@@ -565,4 +565,83 @@ mod tests {
         assert_eq!(session.message_count(), 0);
         assert!(session.age() < Duration::from_secs(1));
     }
+
+    #[test]
+    fn test_rotate_session() {
+        use x25519_dalek::EphemeralSecret;
+
+        let mut crypto = CryptoLayer::new();
+        let kp = crypto.generate_keypair().unwrap();
+        let their_secret = EphemeralSecret::random_from_rng(OsRng);
+        let their_public = PublicKey::from(&their_secret);
+
+        // Create initial session
+        let shared = crypto.diffie_hellman(kp.private_key(), their_public.as_bytes()).unwrap();
+        crypto.create_session("peer-1", &shared);
+
+        // Encrypt some messages under old key
+        crypto.encrypt_for("peer-1", b"msg-1").unwrap();
+        crypto.encrypt_for("peer-1", b"msg-2").unwrap();
+
+        // Rotate with new shared secret
+        let their_secret2 = EphemeralSecret::random_from_rng(OsRng);
+        let their_public2 = PublicKey::from(&their_secret2);
+        let shared2 = crypto.diffie_hellman(kp.private_key(), their_public2.as_bytes()).unwrap();
+
+        let old_count = crypto.rotate_session("peer-1", &shared2).unwrap();
+        assert_eq!(old_count, 2, "old key had 2 messages");
+
+        // New key should work
+        let encrypted = crypto.encrypt_for("peer-1", b"msg-after-rotate").unwrap();
+        let decrypted = crypto.decrypt_from("peer-1", &encrypted).unwrap();
+        assert_eq!(decrypted, b"msg-after-rotate");
+
+        assert!(crypto.has_session("peer-1"));
+    }
+
+    #[test]
+    fn test_sessions_needing_rotation() {
+        use x25519_dalek::EphemeralSecret;
+
+        let mut crypto = CryptoLayer::new();
+        let kp = crypto.generate_keypair().unwrap();
+
+        // Create sessions for 3 peers
+        for i in 0..3u8 {
+            let their_secret = EphemeralSecret::random_from_rng(OsRng);
+            let their_public = PublicKey::from(&their_secret);
+            let shared = crypto.diffie_hellman(kp.private_key(), their_public.as_bytes()).unwrap();
+            crypto.create_session(&format!("peer-{i}"), &shared);
+        }
+
+        // None should need rotation yet
+        assert!(crypto.sessions_needing_rotation().is_empty());
+
+        // Force one session to need rotation via counter
+        {
+            let session = crypto.sessions.get_mut("peer-1").unwrap();
+            session.counter = MAX_MESSAGES_PER_SESSION;
+        }
+
+        let needing = crypto.sessions_needing_rotation();
+        assert_eq!(needing.len(), 1);
+        assert!(needing.contains(&"peer-1".to_string()));
+    }
+
+    #[test]
+    fn test_session_count() {
+        let mut crypto = CryptoLayer::new();
+        assert_eq!(crypto.session_count(), 0);
+
+        let kp = crypto.generate_keypair().unwrap();
+        let their_secret = x25519_dalek::EphemeralSecret::random_from_rng(OsRng);
+        let their_public = PublicKey::from(&their_secret);
+        let shared = crypto.diffie_hellman(kp.private_key(), their_public.as_bytes()).unwrap();
+
+        crypto.create_session("peer-a", &shared);
+        assert_eq!(crypto.session_count(), 1);
+
+        crypto.remove_session("peer-a");
+        assert_eq!(crypto.session_count(), 0);
+    }
 }
