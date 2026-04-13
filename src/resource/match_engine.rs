@@ -292,7 +292,23 @@ impl MatchEngine {
         let score = cpu_ratio * 0.4 + mem_ratio * 0.3 + bw_ratio * 0.15 + stor_ratio * 0.15;
 
         // Clamp to [0, 1].
-        score.clamp(0.0, 1.0)
+        let base_score = score.clamp(0.0, 1.0);
+
+        // Age decay: advertisements older than 60s are penalized.
+        // Linear decay from 1.0 → 0.1 over the next 120s, then stays at 0.1.
+        let age_factor = {
+            let age_ms = now_ms().saturating_sub(ad.timestamp);
+            if age_ms <= 60_000 {
+                1.0
+            } else if age_ms <= 180_000 {
+                // 60s..180s: 1.0 → 0.1 linearly
+                1.0 - 0.9 * ((age_ms - 60_000) as f64 / 120_000.0)
+            } else {
+                0.1
+            }
+        };
+
+        (base_score * age_factor).clamp(0.0, 1.0)
     }
 }
 
@@ -384,7 +400,7 @@ mod tests {
     #[test]
     fn test_find_providers_all_match() {
         let engine = MatchEngine::new();
-        let table = populated_table();
+        let mut table = populated_table();
         let sessions = ResourceSessionManager::new();
         let req = make_request(0.05, 256);
 
@@ -400,7 +416,7 @@ mod tests {
     #[test]
     fn test_find_providers_partial_match() {
         let engine = MatchEngine::new();
-        let table = populated_table();
+        let mut table = populated_table();
         let sessions = ResourceSessionManager::new();
 
         // Only "big" can satisfy 50% CPU + 4GB.
@@ -413,7 +429,7 @@ mod tests {
     #[test]
     fn test_find_providers_no_match() {
         let engine = MatchEngine::new();
-        let table = populated_table();
+        let mut table = populated_table();
         let sessions = ResourceSessionManager::new();
 
         // Impossible request.
@@ -425,7 +441,7 @@ mod tests {
     #[test]
     fn test_find_providers_with_existing_allocations() {
         let engine = MatchEngine::new();
-        let table = populated_table();
+        let mut table = populated_table();
         let mut sessions = ResourceSessionManager::new();
 
         // Allocate most of "big"'s resources.
@@ -441,7 +457,7 @@ mod tests {
     #[test]
     fn test_find_best_returns_highest() {
         let engine = MatchEngine::new();
-        let table = populated_table();
+        let mut table = populated_table();
         let sessions = ResourceSessionManager::new();
         let req = make_request(0.05, 256);
 
@@ -453,7 +469,7 @@ mod tests {
     #[test]
     fn test_find_best_none_when_no_match() {
         let engine = MatchEngine::new();
-        let table = populated_table();
+        let mut table = populated_table();
         let sessions = ResourceSessionManager::new();
         let req = make_request(1.0, 100_000);
 
@@ -548,7 +564,7 @@ mod tests {
     #[test]
     fn test_total_score_is_weighted_average() {
         let engine = MatchEngine::new();
-        let table = populated_table();
+        let mut table = populated_table();
         let sessions = ResourceSessionManager::new();
         let req = make_request(0.05, 256);
 
@@ -579,7 +595,7 @@ mod tests {
     #[test]
     fn test_concurrent_requests_dont_double_allocate() {
         let engine = MatchEngine::new();
-        let table = populated_table();
+        let mut table = populated_table();
         let mut sessions = ResourceSessionManager::new();
 
         // "big" has 0.8 CPU. Two requests of 0.5 each should only fit one.
@@ -594,5 +610,70 @@ mod tests {
         // Second request: "big" should be excluded (0.8 - 0.5 = 0.3 < 0.5).
         let r2 = engine.find_providers(&req, &table, &sessions);
         assert!(r2.iter().all(|r| r.provider_id != "big"));
+    }
+
+    // ── Age decay tests ──
+
+    #[test]
+    fn test_age_decay_fresh_advertisement() {
+        let engine = MatchEngine::new();
+        let ad = make_ad("provider", 1.0, 8192, 100_000, 1_000_000);
+        let req = make_request(0.1, 512);
+
+        let mut table = populated_table();
+        table.update(ad.clone());
+
+        let sessions = ResourceSessionManager::new();
+        let results = engine.find_providers(&req, &table, &sessions);
+
+        // Find our specific provider
+        let result = results.iter().find(|r| r.provider_id == "provider");
+        assert!(result.is_some());
+        assert!(result.unwrap().score > 0.8, "fresh ad should score high, got {}", result.unwrap().score);
+    }
+
+    #[test]
+    fn test_age_decay_stale_advertisement() {
+        let engine = MatchEngine::new();
+        let mut ad = make_ad("provider", 1.0, 8192, 100_000, 1_000_000);
+        // Set timestamp to 200s ago (beyond 180s decay window)
+        ad.timestamp = crate::resource::now_ms() - 200_000;
+
+        let mut table = populated_table();
+        table.update(ad);
+
+        let req = make_request(0.1, 512);
+        let sessions = ResourceSessionManager::new();
+        let results = engine.find_providers(&req, &table, &sessions);
+
+        let result = results.iter().find(|r| r.provider_id == "provider");
+        assert!(result.is_some());
+        // Base score ~0.9, age_factor = 0.1, so final ~0.09
+        let score = result.unwrap().score;
+        assert!(score < 0.25, "stale ad should be penalized, got {}", score);
+        assert!(score > 0.0, "stale ad should still have some score");
+    }
+
+    #[test]
+    fn test_age_decay_middle_advertisement() {
+        let engine = MatchEngine::new();
+        let mut ad = make_ad("provider", 1.0, 8192, 100_000, 1_000_000);
+        // 120s ago: 60s past start of decay, age_factor = 1.0 - 0.9*(60/120) = 0.55
+        ad.timestamp = crate::resource::now_ms() - 120_000;
+
+        let mut table = populated_table();
+        table.update(ad);
+
+        let req = make_request(0.1, 512);
+        let sessions = ResourceSessionManager::new();
+        let results = engine.find_providers(&req, &table, &sessions);
+
+        let result = results.iter().find(|r| r.provider_id == "provider");
+        assert!(result.is_some());
+        let score = result.unwrap().score;
+        assert!(
+            score > 0.3 && score < 0.6,
+            "mid-decay ad should score moderately, got {}", score
+        );
     }
 }
