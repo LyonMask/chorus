@@ -33,6 +33,10 @@ pub struct WorkReceipt {
     /// Provider's Ed25519 signature.
     #[serde(default)]
     pub provider_signature: Vec<u8>,
+
+    /// Consumer's Ed25519 countersignature (Phase 4).
+    #[serde(default)]
+    pub consumer_signature: Vec<u8>,
 }
 
 impl WorkReceipt {
@@ -55,6 +59,7 @@ impl WorkReceipt {
             window_start: now.saturating_sub(duration_ms),
             window_end: now,
             provider_signature: Vec::new(),
+            consumer_signature: Vec::new(),
         }
     }
 
@@ -316,6 +321,7 @@ mod tests {
             window_start: 0,
             window_end: 0,
             provider_signature: Vec::new(),
+            consumer_signature: Vec::new(),
         };
         assert!(!receipt.is_valid());
     }
@@ -415,6 +421,7 @@ mod tests {
             window_end: 1005000,
             duration_ms: 5000,
             provider_signature: Vec::new(),
+            consumer_signature: Vec::new(),
         };
         // blake3("alice:bob:sess-42:5000:1048576:1000000:1005000") → deterministic hex
         let expected = blake3::hash(b"alice:bob:sess-42:5000:1048576:1000000:1005000").to_hex().to_string();

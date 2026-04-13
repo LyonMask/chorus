@@ -16,7 +16,7 @@
 mod types;
 mod table;
 mod session;
-mod proof;
+pub mod proof;
 mod backoff;
 mod engine;
 pub mod match_engine;
