@@ -155,7 +155,7 @@ async fn repl(net: Arc<P2PNetwork>, mut ev: tokio::sync::mpsc::UnboundedReceiver
         let line = match lines.next_line().await { Ok(Some(l)) => l, _ => break };
         let line = line.trim().to_string();
         if line.is_empty() { continue; }
-        let parts: Vec<&str> = line.splitn(2, ' ').collect();
+        let parts: Vec<&str> = line.splitn(3, ' ').collect();
         match parts[0] {
             "help" => print_help(),
             "quit" | "exit" | "q" => { let _ = s.net.shutdown(); break; }
@@ -175,10 +175,13 @@ async fn repl(net: Arc<P2PNetwork>, mut ev: tokio::sync::mpsc::UnboundedReceiver
                 println!();
             }
             "chat" => {
-                if parts.len() < 3 { eprintln!("Usage: chat <did> <message>"); continue; }
-                let rest = line[line.find(' ').unwrap()..].trim_start();
-                let (_, msg) = rest.split_once(' ').unwrap();
-                match s.peer_id(parts[1]) {
+                let rest = match line.find(' ').and_then(|i| line[i+1..].find(' ')) {
+                    Some(pos) => &line[pos+2..],
+                    None => { eprintln!("Usage: chat <did> <message>"); continue; }
+                };
+                let did = parts[1];
+                let msg = rest;
+                match s.peer_id(did) {
                     Ok(pid) => {
                         if let Err(e) = s.net.send_encrypted(pid, msg.as_bytes().to_vec()).await { eprintln!("❌ {}", e); }
                         else { println!("✅ Sent"); }
@@ -204,11 +207,17 @@ async fn repl(net: Arc<P2PNetwork>, mut ev: tokio::sync::mpsc::UnboundedReceiver
             "request" => {
                 if parts.len() < 2 { eprintln!("Usage: request <did> [cpu=N mem=M]"); continue; }
                 let mut cpu: f32 = 0.5; let mut mem: u64 = 256;
-                for p in parts[2..].iter() {
+                // Parse optional params from parts[1] which may contain "did cpu=N mem=M"
+                let rest = line[line.find(' ').unwrap()..].trim_start();
+                let (did_str, rest) = match rest.split_once(' ') {
+                    Some((d, r)) => (d, r),
+                    None => (rest, ""),
+                };
+                for p in rest.split_whitespace() {
                     if let Some(v) = p.strip_prefix("cpu=") { cpu = v.parse().unwrap_or(0.5); }
                     if let Some(v) = p.strip_prefix("mem=") { mem = v.parse().unwrap_or(256); }
                 }
-                match s.peer_id(parts[1]) {
+                match s.peer_id(did_str) {
                     Ok(pid) => {
                         let mut req = ResourceRequest::new(s.agent_id.clone());
                         req.min_cpu = cpu;
