@@ -742,4 +742,76 @@ mod tests {
 
         assert!(verify_advertisement(&ad).is_err());
     }
+
+    // ── IdentityRegistry Tests ──
+
+    #[test]
+    fn test_registry_bind_and_lookup() {
+        let mut registry = IdentityRegistry::new();
+        let peer_id = "12D3KooWABC";
+        let did = "did:walkie:test-key";
+        let pubkey = vec![42u8; 32];
+
+        registry.bind(peer_id, did, pubkey.clone());
+        assert_eq!(registry.did_for_peer(peer_id), Some(did));
+        assert_eq!(registry.peer_for_did(did), Some(peer_id));
+        assert_eq!(registry.len(), 1);
+    }
+
+    #[test]
+    fn test_registry_reverse_lookup() {
+        let mut registry = IdentityRegistry::new();
+
+        registry.bind("peer-1", "did:walkie:alice", vec![1u8; 32]);
+        registry.bind("peer-2", "did:walkie:bob", vec![2u8; 32]);
+
+        assert_eq!(registry.peer_for_did("did:walkie:alice"), Some("peer-1"));
+        assert_eq!(registry.peer_for_did("did:walkie:bob"), Some("peer-2"));
+    }
+
+    #[test]
+    fn test_registry_unbind() {
+        let mut registry = IdentityRegistry::new();
+
+        registry.bind("peer-1", "did:walkie:alice", vec![1u8; 32]);
+        assert_eq!(registry.len(), 1);
+
+        let removed = registry.unbind("peer-1");
+        assert!(removed);
+        assert!(registry.did_for_peer("peer-1").is_none());
+        assert!(registry.peer_for_did("did:walkie:alice").is_none());
+        assert_eq!(registry.len(), 0);
+    }
+
+    #[test]
+    fn test_registry_rebind_moves_old_binding() {
+        let mut registry = IdentityRegistry::new();
+
+        // Bind alice to peer-1
+        registry.bind("peer-1", "did:walkie:alice", vec![1u8; 32]);
+        // Rebind alice to peer-2 (simulates reconnection with new PeerId)
+        registry.bind("peer-2", "did:walkie:alice", vec![1u8; 32]);
+
+        // Old binding should be gone
+        assert!(registry.did_for_peer("peer-1").is_none());
+        // New binding should work
+        assert_eq!(registry.did_for_peer("peer-2"), Some("did:walkie:alice"));
+        // DID should map to new peer
+        assert_eq!(registry.peer_for_did("did:walkie:alice"), Some("peer-2"));
+        // Only 1 binding total
+        assert_eq!(registry.len(), 1);
+    }
+
+    #[test]
+    fn test_registry_get_binding() {
+        let mut registry = IdentityRegistry::new();
+        let pubkey = vec![42u8; 32];
+
+        registry.bind("peer-1", "did:walkie:alice", pubkey.clone());
+        let binding = registry.get_binding("peer-1").unwrap();
+
+        assert_eq!(binding.did, "did:walkie:alice");
+        assert_eq!(binding.public_key, pubkey);
+        assert!(binding.bound_at > 0);
+    }
 }
