@@ -64,16 +64,16 @@ pub struct CrpEntry {
 #[derive(Debug, Clone)]
 pub struct CrpAccumulator {
     /// Recent contribution samples (ring buffer with N entries).
-    pub samples: Vec<ContributionSample>,
+    pub(crate) samples: Vec<ContributionSample>,
 
     /// CRP history for decay calculation.
-    pub history: Vec<CrpEntry>,
+    pub(crate) history: Vec<CrpEntry>,
 
     /// Network size (for pioneer multiplier and cap).
-    pub network_size: u32,
+    pub(crate) network_size: u32,
 
     /// Maximum number of samples to keep.
-    pub max_samples: usize,
+    pub(crate) max_samples: usize,
 }
 
 impl Default for CrpAccumulator {
@@ -112,12 +112,21 @@ impl CrpAccumulator {
     }
 
     /// Record CRP earned from a completed period.
+    /// Maximum number of CRP history entries before auto-pruning.
+    pub const MAX_CRP_RECORDS: usize = 10_000;
+
+    /// Record CRP earned from a completed period.
+    /// Auto-prunes oldest entries when exceeding MAX_CRP_RECORDS.
     pub fn record_crp(&mut self, crp_amount: f64, window_hours: f64) {
         self.history.push(CrpEntry {
             crp_amount,
             timestamp_ms: crate::resource::now_ms(),
             window_hours,
         });
+        // Auto-prune when exceeding limit
+        while self.history.len() > Self::MAX_CRP_RECORDS {
+            self.history.remove(0);
+        }
     }
 
     /// Calculate CRP rate from all current samples.

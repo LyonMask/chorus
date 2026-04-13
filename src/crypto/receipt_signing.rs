@@ -36,13 +36,49 @@ pub fn verify_provider_signature(
 /// Consumer countersigns a WorkReceipt after verifying provider's claim.
 ///
 /// The signature covers all fields except both signatures.
+/// Error returned when countersign preconditions are not met.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CountersignError {
+    /// Provider has not signed the receipt yet.
+    ProviderNotSigned,
+    /// Provider signature is malformed (not 64 bytes).
+    MalformedProviderSignature,
+}
+
+impl std::fmt::Display for CountersignError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ProviderNotSigned => write!(f, "provider has not signed this receipt"),
+            Self::MalformedProviderSignature => write!(f, "provider signature is malformed"),
+        }
+    }
+}
+
+impl std::error::Error for CountersignError {}
+
+/// Check that a WorkReceipt has a valid provider signature before countersigning.
+///
+/// Returns `Err` if the receipt is unsigned or the provider signature is malformed.
+/// Use this before calling `countersign_work_receipt` to enforce dual-sign protocol.
+pub fn require_provider_signed(receipt: &WorkReceipt) -> Result<(), CountersignError> {
+    if receipt.provider_signature.is_empty() {
+        return Err(CountersignError::ProviderNotSigned);
+    }
+    if receipt.provider_signature.len() != 64 {
+        return Err(CountersignError::MalformedProviderSignature);
+    }
+    Ok(())
+}
+
 pub fn countersign_work_receipt(
     receipt: &mut WorkReceipt,
     consumer_signing_key: &ed25519_dalek::SigningKey,
-) {
+) -> Result<(), CountersignError> {
+    require_provider_signed(receipt)?;
     let payload = receipt_full_payload(receipt);
     let signature = consumer_signing_key.sign(&payload);
     receipt.consumer_signature = signature.to_bytes().to_vec();
+    Ok(())
 }
 
 /// Verify the consumer's countersignature on a WorkReceipt.
@@ -177,7 +213,7 @@ mod tests {
         assert!(verify_provider_signature(&receipt, &provider_pk));
 
         // Consumer countersigns
-        countersign_work_receipt(&mut receipt, &consumer_sk);
+        countersign_work_receipt(&mut receipt, &consumer_sk).unwrap();
         assert_eq!(receipt.consumer_signature.len(), 64);
         assert!(verify_consumer_signature(&receipt, &consumer_pk));
     }
@@ -195,7 +231,7 @@ mod tests {
         assert!(!is_fully_signed(&receipt));
         assert!(!is_unverified(&receipt));
 
-        countersign_work_receipt(&mut receipt, &consumer_sk);
+        countersign_work_receipt(&mut receipt, &consumer_sk).unwrap();
         assert!(is_fully_signed(&receipt));
     }
 
@@ -259,13 +295,32 @@ mod tests {
     }
 
     #[test]
+    fn test_countersign_unsigned_receipt_rejected() {
+        let (consumer_sk, _) = generate_keypair();
+        let mut receipt = make_test_receipt();
+        // Provider has NOT signed — countersign should fail
+        let result = countersign_work_receipt(&mut receipt, &consumer_sk);
+        assert_eq!(result, Err(CountersignError::ProviderNotSigned));
+    }
+
+    #[test]
+    fn test_require_provider_signed_malformed() {
+        let receipt = {
+            let mut r = make_test_receipt();
+            r.provider_signature = vec![1u8; 32]; // wrong length
+            r
+        };
+        assert_eq!(require_provider_signed(&receipt), Err(CountersignError::MalformedProviderSignature));
+    }
+
+    #[test]
     fn test_countersign_tampered_provider_sig_fails() {
         let (provider_sk, provider_pk) = generate_keypair();
         let (consumer_sk, consumer_pk) = generate_keypair();
         let mut receipt = make_test_receipt();
 
         sign_work_receipt(&mut receipt, &provider_sk);
-        countersign_work_receipt(&mut receipt, &consumer_sk);
+        countersign_work_receipt(&mut receipt, &consumer_sk).unwrap();
 
         // Both sigs should be valid before tampering
         assert!(verify_provider_signature(&receipt, &provider_pk));

@@ -358,4 +358,23 @@ mod tests {
         assert_ne!(p1, p3);
         assert_ne!(p1, p4);
     }
+    #[test]
+    fn test_attestation_replay_same_nonce_rejected() {
+        let seed = [42u8; 32];
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
+
+        let att1 = IdentityAttestation::sign("did:walkie:test1", "12D3KooWP", &signing_key);
+        let att2 = IdentityAttestation::sign("did:walkie:test1", "12D3KooWP", &signing_key);
+
+        // Each sign() produces a unique random nonce
+        assert_ne!(att1.nonce, att2.nonce);
+
+        let mut store = NonceStore::new(100);
+        assert!(store.check_and_insert(&att1.nonce).is_ok());
+        assert!(store.check_and_insert(&att2.nonce).is_ok());
+
+        // Replay of same nonce must be rejected
+        assert_eq!(store.check_and_insert(&att1.nonce), Err(TrustError::Replayed));
+        assert_eq!(store.check_and_insert(&att2.nonce), Err(TrustError::Replayed));
+    }
 }

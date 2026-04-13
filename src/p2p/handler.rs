@@ -190,6 +190,7 @@ pub(crate) fn handle_direct_request(
     resource_engine: &mut ContributionEngine,
     identity_registry: &mut Option<crate::identity::IdentityRegistry>,
     signing_key: &Option<std::sync::Arc<ed25519_dalek::SigningKey>>,
+    nonce_store: &mut crate::trust::peer_binding::NonceStore,
 ) -> DirectResponse {
     let peer_str = from.to_string();
     let request_id = request.request_id;
@@ -317,7 +318,7 @@ pub(crate) fn handle_direct_request(
         }
 
         DirectPayload::IdentityAttestation { attestation_json } => {
-            let (resp, _next) = handle_identity_attestation(from, &attestation_json, request_id, event_tx, identity_registry);
+            let (resp, _next) = handle_identity_attestation(from, &attestation_json, request_id, event_tx, identity_registry, nonce_store);
             resp
         }
     }
@@ -834,6 +835,7 @@ pub(crate) fn handle_identity_attestation(
     request_id: u64,
     event_tx: &mpsc::UnboundedSender<P2PEvent>,
     identity_registry: &mut Option<crate::identity::IdentityRegistry>,
+    nonce_store: &mut crate::trust::peer_binding::NonceStore,
 ) -> (DirectResponse, Option<DirectRequest>) {
     use crate::trust::peer_binding::IdentityAttestation;
 
@@ -846,7 +848,15 @@ pub(crate) fn handle_identity_attestation(
         }
     };
 
+
     let peer_id_str = from.to_string();
+
+    // ── Replay defense: check nonce BEFORE signature verification ──
+    let nonce_bytes = &attestation.nonce;
+    if nonce_store.check_and_insert(nonce_bytes).is_err() {
+        tracing::warn!(target: "trust", "🔒 Replay detected: attestation from {from} with duplicate nonce");
+        return (direct::error_response(request_id, "replay detected"), None);
+    }
 
     // Get expected DID and public key from the identity registry
     let registry = match identity_registry.as_mut() {

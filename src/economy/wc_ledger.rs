@@ -58,22 +58,25 @@ pub struct CrpRecord {
 #[derive(Debug, Clone)]
 pub struct WcLedger {
     /// Current WC balance.
-    pub balance: f64,
+    pub(crate) balance: f64,
 
     /// CRP accumulation rate (CRP/hr).
-    pub crp_rate: f64,
+    pub(crate) crp_rate: f64,
+
+    /// Known network size (for pioneer multiplier / cap).
+    pub(crate) network_size: u32,
 
     /// Total CRP earned (cumulative, subject to cap).
-    pub crp_cumulative: f64,
+    pub(crate) crp_cumulative: f64,
 
     /// CRP history for decay calculation.
     pub crp_history: Vec<CrpRecord>,
 
     /// WC spent today.
-    pub daily_spent: f64,
+    pub(crate) daily_spent: f64,
 
     /// Timestamp (ms) when daily spending was last reset.
-    pub daily_spent_reset_at: u64,
+    pub(crate) daily_spent_reset_at: u64,
 }
 
 impl Default for WcLedger {
@@ -84,6 +87,7 @@ impl Default for WcLedger {
 
 impl WcLedger {
     /// Create a new ledger with initial WC grant.
+    /// Create a new ledger with default network_size=10.
     pub fn new() -> Self {
         Self {
             balance: economy_params::INITIAL_WC_GRANT,
@@ -92,15 +96,21 @@ impl WcLedger {
             crp_history: Vec::new(),
             daily_spent: 0.0,
             daily_spent_reset_at: crate::resource::now_ms(),
+            network_size: 10,
         }
     }
 
-    /// Create a ledger with a specific initial balance (for testing).
+    /// Create a ledger with a specific initial balance and network size (for testing).
     pub fn with_balance(initial_balance: f64) -> Self {
         Self {
             balance: initial_balance,
             ..Self::new()
         }
+    }
+
+    /// Update network size (e.g., after mDNS discovery).
+    pub fn set_network_size(&mut self, size: u32) {
+        self.network_size = size.max(1);
     }
 
     /// Calculate current CRP rate from resource contributions.
@@ -135,7 +145,7 @@ impl WcLedger {
 
         // Enforce CRP cap
         self.crp_cumulative += crp_amount;
-        let effective_cap = economy_params::crp_cap(100); // TODO: pass real network_size
+        let effective_cap = economy_params::crp_cap(self.network_size);
         if self.crp_cumulative > effective_cap {
             self.crp_cumulative = effective_cap;
         }
