@@ -59,7 +59,11 @@ impl WorkReceipt {
     }
 
     /// Compute a proof hash for the contribution record.
-    /// Uses blake3-like deterministic serialization.
+    ///
+    /// Uses blake3 for deterministic, cross-platform hashing. Unlike
+    /// DefaultHasher, blake3 produces identical output across all
+    /// platforms and Rust versions, which is required for multi-node
+    /// verification of contribution proofs.
     pub fn proof_hash(&self) -> String {
         let data = format!(
             "{}:{}:{}:{}:{}:{}:{}",
@@ -71,12 +75,7 @@ impl WorkReceipt {
             self.window_start,
             self.window_end,
         );
-        // Simple hash for Phase 2 — Phase 3 can upgrade to blake3.
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-        let mut hasher = DefaultHasher::new();
-        data.hash(&mut hasher);
-        format!("{:016x}", hasher.finish())
+        blake3::hash(data.as_bytes()).to_hex().to_string()
     }
 
     /// Check basic validity: non-negative values, sane time window.
@@ -388,10 +387,37 @@ mod tests {
     #[test]
     fn test_proof_hash_deterministic() {
         let r1 = WorkReceipt::new("c".into(), "p".into(), "s".into(), 100, 200, 300);
-        let _r2 = WorkReceipt::new("c".into(), "p".into(), "s".into(), 100, 200, 300);
-        // Same fields → same hash (within same ms window).
-        // Note: window_start/window_end differ by time, so hashes differ.
-        // But the underlying logic is deterministic for same inputs.
-        assert!(!r1.proof_hash().is_empty());
+        // blake3 is deterministic: same input bytes → same hash every time.
+        let h1 = r1.proof_hash();
+        let h2 = r1.proof_hash();
+        assert_eq!(h1, h2);
+        // blake3 produces 64-char hex (256 bits).
+        assert_eq!(h1.len(), 64);
+    }
+
+    #[test]
+    fn test_proof_hash_different_inputs() {
+        let r1 = WorkReceipt::new("c".into(), "p".into(), "s1".into(), 100, 200, 300);
+        let r2 = WorkReceipt::new("c".into(), "p".into(), "s2".into(), 100, 200, 300);
+        assert_ne!(r1.proof_hash(), r2.proof_hash());
+    }
+
+    #[test]
+    fn test_proof_hash_known_value() {
+        // Construct a receipt with controlled timestamp fields for known-value testing.
+        let r = WorkReceipt {
+            consumer: "alice".into(),
+            provider: "bob".into(),
+            session_id: "sess-42".into(),
+            cpu_used_ms: 5000,
+            memory_peak_bytes: 1048576,
+            window_start: 1000000,
+            window_end: 1005000,
+            duration_ms: 5000,
+            provider_signature: Vec::new(),
+        };
+        // blake3("alice:bob:sess-42:5000:1048576:1000000:1005000") → deterministic hex
+        let expected = blake3::hash(b"alice:bob:sess-42:5000:1048576:1000000:1005000").to_hex().to_string();
+        assert_eq!(r.proof_hash(), expected);
     }
 }
