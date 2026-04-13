@@ -618,7 +618,7 @@ pub(crate) fn handle_resource_declaration(
         advertisement.memory_offer_mb,
     );
 
-    if let Err(e) = advertisement.validate() {
+    if let Err(e) = advertisement.validate_with_signature() {
         tracing::warn!(target: "resource", "📦 ResourceDeclaration from {from} rejected: {e}");
         let _ = event_tx.send(P2PEvent::ResourceDeclarationRejected {
             peer_id: from,
@@ -747,6 +747,7 @@ mod tests {
             bandwidth_offer: 10_000_000,
             storage_offer: 50 * 1024 * 1024 * 1024,
             features: vec!["always-on".into()],
+            signing_pubkey: Vec::new(),
             signature: Vec::new(),
         };
         engine.declare_resources(ad);

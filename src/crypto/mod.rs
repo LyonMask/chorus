@@ -10,6 +10,7 @@ use x25519_dalek::{PublicKey, SharedSecret, StaticSecret};
 
 /// Encrypted message format: nonce (12 bytes) || ciphertext+tag
 pub const NONCE_SIZE: usize = 12;
+/// Nonce layout: salt(4) || counter(8).
 
 /// Maximum number of messages per session before mandatory key rotation.
 const MAX_MESSAGES_PER_SESSION: u64 = 100_000;
@@ -44,15 +45,22 @@ pub struct SessionKey {
     cipher: ChaCha20Poly1305,
     counter: u64,
     created_at: Instant,
+    /// Random 4-byte salt mixed into nonce bytes [0..4].
+    /// Ensures nonce uniqueness even if counters collide across
+    /// independently created sessions.
+    salt: [u8; 4],
 }
 
 impl SessionKey {
     /// Create from a raw 32-byte key (e.g. from X25519 DH).
     pub fn from_raw_key(key: &[u8; 32]) -> Self {
+        let mut salt = [0u8; 4];
+        OsRng.fill_bytes(&mut salt);
         Self {
             cipher: ChaCha20Poly1305::new_from_slice(key).expect("32 bytes, always valid"),
             counter: 0,
             created_at: Instant::now(),
+            salt,
         }
     }
 
@@ -83,6 +91,7 @@ impl SessionKey {
     /// Encrypt plaintext -> nonce(12) || ciphertext+tag
     pub fn encrypt(&mut self, plaintext: &[u8]) -> Result<Vec<u8>> {
         let mut nonce_bytes = [0u8; NONCE_SIZE];
+        nonce_bytes[0..4].copy_from_slice(&self.salt);
         nonce_bytes[4..].copy_from_slice(&self.counter.to_le_bytes());
         self.counter += 1;
 
