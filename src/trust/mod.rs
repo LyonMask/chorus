@@ -15,4 +15,4 @@
 
 pub mod types;
 pub mod peer_binding;
-// pub mod endorsement;  // TODO: T4.0-5
+pub mod endorsement;
