@@ -800,7 +800,7 @@ mod tests {
         request.expires_at = crate::resource::now_ms() - 1000;
         request.consumer_id = from.to_string();
 
-        let (_response, offer_req) = handle_resource_request(from, request, 1, &tx, &mut engine);
+        let (response, offer_req) = handle_resource_request(from, request, 1, &tx, &mut engine);
         assert!(matches!(response.status, DirectResponseStatus::Error(_)));
         assert!(offer_req.is_none(), "expired request should not produce an offer");
 

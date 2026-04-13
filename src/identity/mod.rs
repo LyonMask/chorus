@@ -315,6 +315,37 @@ impl IdentityEnvelope {
     }
 }
 
+// ─── Resource Advertisement Signing ────────────────────
+
+/// Sign a [`ResourceAdvertisement`](crate::resource::ResourceAdvertisement)
+/// with the given Ed25519 signing key.
+///
+/// Populates `signing_pubkey` (the verifier's public key, 32 bytes) and
+/// `signature` (64 bytes) on the advertisement in place and returns the
+/// signed clone.
+pub fn sign_advertisement(
+    ad: &mut crate::resource::ResourceAdvertisement,
+    signing_key: &SigningKey,
+) {
+    let pubkey_bytes = signing_key.verifying_key().to_bytes().to_vec();
+    ad.signing_pubkey = pubkey_bytes.clone();
+    ad.signature.clear();
+
+    let payload = ad.signable_bytes();
+    let signature = signing_key.sign(&payload);
+    ad.signature = signature.to_bytes().to_vec();
+}
+
+/// Verify the Ed25519 signature on a
+/// [`ResourceAdvertisement`](crate::resource::ResourceAdvertisement).
+///
+/// Delegates to [`ResourceAdvertisement::verify_signature()`].
+pub fn verify_advertisement(
+    ad: &crate::resource::ResourceAdvertisement,
+) -> std::result::Result<(), crate::resource::ResourceValidationError> {
+    ad.verify_signature()
+}
+
 // ─── Tests ──────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -581,5 +612,134 @@ mod tests {
             .unwrap();
         assert_eq!(identity.display_name.len(), 10_000);
         assert!(identity.verify().is_ok());
+    }
+
+    // ── Advertisement signing tests ──────────────────────────────
+
+    #[test]
+    fn test_sign_and_verify_advertisement() {
+        use crate::resource::{ResourceAdvertisement, ResourceSpec};
+
+        let signing_key = SigningKey::generate(&mut OsRng);
+        let mut ad = ResourceAdvertisement {
+            agent_id: "did:walkie:test".into(),
+            sequence: 1,
+            timestamp: 1617000000000,
+            spec: ResourceSpec {
+                cpu_cores: 4,
+                total_memory_mb: 8192,
+                max_bandwidth_up_mbps: 100,
+                total_storage_bytes: 1024 * 1024 * 1024,
+            },
+            cpu_offer: 0.5,
+            memory_offer_mb: 4096,
+            bandwidth_offer: 5_000_000,
+            storage_offer: 512 * 1024 * 1024,
+            features: vec!["gpu".into()],
+            signing_pubkey: Vec::new(),
+            signature: Vec::new(),
+        };
+
+        sign_advertisement(&mut ad, &signing_key);
+
+        // pubkey should be 32 bytes, signature 64 bytes
+        assert_eq!(ad.signing_pubkey.len(), 32);
+        assert_eq!(ad.signature.len(), 64);
+
+        // Verification should succeed
+        assert!(verify_advertisement(&ad).is_ok());
+    }
+
+    #[test]
+    fn test_tampered_advertisement_fails_verification() {
+        use crate::resource::{ResourceAdvertisement, ResourceSpec};
+
+        let signing_key = SigningKey::generate(&mut OsRng);
+        let mut ad = ResourceAdvertisement {
+            agent_id: "did:walkie:test".into(),
+            sequence: 1,
+            timestamp: 1617000000000,
+            spec: ResourceSpec {
+                cpu_cores: 4,
+                total_memory_mb: 8192,
+                max_bandwidth_up_mbps: 100,
+                total_storage_bytes: 1024 * 1024 * 1024,
+            },
+            cpu_offer: 0.5,
+            memory_offer_mb: 4096,
+            bandwidth_offer: 5_000_000,
+            storage_offer: 512 * 1024 * 1024,
+            features: vec!["gpu".into()],
+            signing_pubkey: Vec::new(),
+            signature: Vec::new(),
+        };
+
+        sign_advertisement(&mut ad, &signing_key);
+
+        // Tamper with cpu_offer after signing
+        ad.cpu_offer = 1.0;
+
+        // Verification should fail
+        assert!(verify_advertisement(&ad).is_err());
+    }
+
+    #[test]
+    fn test_unsigned_advertisement_fails_verification() {
+        use crate::resource::{ResourceAdvertisement, ResourceSpec};
+
+        let ad = ResourceAdvertisement {
+            agent_id: "did:walkie:test".into(),
+            sequence: 1,
+            timestamp: 1617000000000,
+            spec: ResourceSpec {
+                cpu_cores: 4,
+                total_memory_mb: 8192,
+                max_bandwidth_up_mbps: 100,
+                total_storage_bytes: 1024 * 1024 * 1024,
+            },
+            cpu_offer: 0.5,
+            memory_offer_mb: 4096,
+            bandwidth_offer: 5_000_000,
+            storage_offer: 512 * 1024 * 1024,
+            features: vec![],
+            signing_pubkey: Vec::new(),
+            signature: Vec::new(),
+        };
+
+        assert!(verify_advertisement(&ad).is_err());
+    }
+
+    #[test]
+    fn test_wrong_key_fails_verification() {
+        use crate::resource::{ResourceAdvertisement, ResourceSpec};
+
+        let signing_key = SigningKey::generate(&mut OsRng);
+        let wrong_key = SigningKey::generate(&mut OsRng);
+
+        let mut ad = ResourceAdvertisement {
+            agent_id: "did:walkie:test".into(),
+            sequence: 1,
+            timestamp: 1617000000000,
+            spec: ResourceSpec {
+                cpu_cores: 4,
+                total_memory_mb: 8192,
+                max_bandwidth_up_mbps: 100,
+                total_storage_bytes: 1024 * 1024 * 1024,
+            },
+            cpu_offer: 0.5,
+            memory_offer_mb: 4096,
+            bandwidth_offer: 5_000_000,
+            storage_offer: 512 * 1024 * 1024,
+            features: vec![],
+            signing_pubkey: Vec::new(),
+            signature: Vec::new(),
+        };
+
+        sign_advertisement(&mut ad, &signing_key);
+
+        // Replace pubkey with wrong key's pubkey — signature won't match
+        ad.signing_pubkey = wrong_key.verifying_key().to_bytes().to_vec();
+
+        assert!(verify_advertisement(&ad).is_err());
     }
 }

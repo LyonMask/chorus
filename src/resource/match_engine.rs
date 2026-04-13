@@ -319,6 +319,7 @@ mod tests {
             storage_offer: stor,
             features: vec!["always-on".to_string()],
             signature: Vec::new(),
+            signing_pubkey: Vec::new(),
         }
     }
 

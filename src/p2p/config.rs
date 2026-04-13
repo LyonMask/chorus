@@ -168,6 +168,7 @@ mod tests {
             bandwidth_offer: 0,
             storage_offer: 0,
             features: vec![],
+            signing_pubkey: vec![],
             signature: vec![],
         };
         let config = P2PConfig {

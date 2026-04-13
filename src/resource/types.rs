@@ -1,5 +1,6 @@
 //! Core types for the resource declaration module.
 
+use ed25519_dalek::{Verifier};
 use serde::{Deserialize, Serialize};
 
 /// Static hardware specification (set at startup, immutable).
@@ -53,7 +54,12 @@ pub struct ResourceAdvertisement {
     /// Feature tags for task matching (e.g. "always-on", "arm64", "gpu").
     pub features: Vec<String>,
 
-    /// Ed25519 signature over all fields except this one.
+    /// Ed25519 signing public key (32 bytes). Used to verify the signature.
+    /// If empty, the advertisement is unsigned.
+    #[serde(default)]
+    pub signing_pubkey: Vec<u8>,
+
+    /// Ed25519 signature over all fields except signature and signing_pubkey.
     #[serde(default)]
     pub signature: Vec<u8>,
 }
@@ -72,6 +78,7 @@ impl ResourceAdvertisement {
             storage_offer: 0,
             features: Vec::new(),
             signature: Vec::new(),
+            signing_pubkey: Vec::new(),
         }
     }
 
@@ -123,11 +130,42 @@ impl ResourceAdvertisement {
         cpu_ok && mem_ok && bw_ok && stor_ok && feat_ok
     }
 
-    /// Serialize the signable payload (all fields except signature).
+    /// Serialize the signable payload (all fields except signature and signing_pubkey).
     pub fn signable_bytes(&self) -> Vec<u8> {
         let mut copy = self.clone();
         copy.signature.clear();
+        copy.signing_pubkey.clear();
         serde_json::to_vec(&copy).unwrap_or_default()
+    }
+
+    /// Check if this advertisement has a valid signature.
+    ///
+    /// Returns Ok(()) if signed correctly, or an error describing why.
+    pub fn verify_signature(&self) -> Result<(), ResourceValidationError> {
+        if self.signature.is_empty() || self.signature.len() != 64 {
+            return Err(ResourceValidationError::MissingSignature);
+        }
+        if self.signing_pubkey.len() != 32 {
+            return Err(ResourceValidationError::InvalidSigningKey);
+        }
+
+        let payload = self.signable_bytes();
+
+        let pubkey_bytes: [u8; 32] = self.signing_pubkey.clone()
+            .try_into()
+            .map_err(|_| ResourceValidationError::InvalidSigningKey)?;
+
+        let sig_bytes: [u8; 64] = self.signature.clone()
+            .try_into()
+            .map_err(|_| ResourceValidationError::InvalidSignature)?;
+
+        let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(&pubkey_bytes)
+            .map_err(|_| ResourceValidationError::InvalidSigningKey)?;
+
+        let signature = ed25519_dalek::Signature::from_bytes(&sig_bytes);
+
+        verifying_key.verify(&payload, &signature)
+            .map_err(|_| ResourceValidationError::InvalidSignature)
     }
 
     /// Validate this advertisement against spec consistency and economy parameters.
@@ -191,6 +229,15 @@ impl ResourceAdvertisement {
 
         Ok(())
     }
+
+    /// Full validation: spec consistency + signature verification.
+    ///
+    /// This is what handlers should call for incoming advertisements.
+    pub fn validate_with_signature(&self) -> Result<(), ResourceValidationError> {
+        self.validate()?;
+        self.verify_signature()?;
+        Ok(())
+    }
 }
 
 // ── Validation Error ───────────────────────────────────────────
@@ -214,6 +261,12 @@ pub enum ResourceValidationError {
     FutureTimestamp,
     /// Sequence number is zero (should be bumped before sending).
     ZeroSequence,
+    /// Signature is missing or empty.
+    MissingSignature,
+    /// Ed25519 signature verification failed.
+    InvalidSignature,
+    /// Signing public key is invalid (wrong length).
+    InvalidSigningKey,
 }
 
 impl std::fmt::Display for ResourceValidationError {
@@ -233,6 +286,9 @@ impl std::fmt::Display for ResourceValidationError {
             Self::InvalidSpec { reason } => write!(f, "invalid spec: {reason}"),
             Self::FutureTimestamp => write!(f, "timestamp is too far in the future"),
             Self::ZeroSequence => write!(f, "sequence must be > 0"),
+            Self::MissingSignature => write!(f, "signature is missing"),
+            Self::InvalidSignature => write!(f, "Ed25519 signature verification failed"),
+            Self::InvalidSigningKey => write!(f, "signing_pubkey must be 32 bytes"),
         }
     }
 }
@@ -452,6 +508,7 @@ mod tests {
             storage_offer: 50 * 1024 * 1024 * 1024,
             features: vec!["always-on".to_string()],
             signature: Vec::new(),
+            signing_pubkey: Vec::new(),
         }
     }
 
