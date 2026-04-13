@@ -18,9 +18,10 @@ use crate::crypto::{CryptoLayer, KeyPair};
 use crate::identity::AgentIdentity;
 use crate::protocol::AgentMessage;
 use crate::resource::{
-    ContributionEngine, ResourceOffer, ResourceRequest, WorkReceipt,
+    ContributionEngine, MatchEngine, RejectReason, ResourceOffer, ResourceRequest, WorkReceipt,
 };
 use crate::resource::now_ms;
+use crate::resource::match_engine::RESERVATION_TTL_MS;
 
 use super::behaviour::WalkieBehaviour;
 use super::direct::{self, DirectPayload, DirectRequest, DirectResponse, DirectResponseStatus};
@@ -270,7 +271,12 @@ pub(crate) fn handle_direct_request(
         // ── Resource request flow (Phase 3) ──
 
         DirectPayload::ResourceRequest { request } => {
-            handle_resource_request(from, request, request_id, event_tx, resource_engine)
+            let (response, offer_request) = handle_resource_request(from, request, request_id, event_tx, resource_engine);
+            if let Some(req) = offer_request {
+                swarm.behaviour_mut().direct.send_request(&from, req);
+                tracing::info!(target: "resource", "📦 sent ResourceOffer request to {from}");
+            }
+            response
         }
 
         DirectPayload::ResourceOffer { offer } => {
@@ -301,6 +307,11 @@ pub(crate) fn handle_direct_request(
             });
             direct::ok_response(request_id)
         }
+
+
+        DirectPayload::ResourceReject { request_id: rejected_req_id, reason } => {
+            handle_resource_reject(from, rejected_req_id, reason, request_id, event_tx, resource_engine)
+        }
     }
 }
 
@@ -318,7 +329,7 @@ pub(crate) fn handle_resource_request(
     request_id: u64,
     event_tx: &mpsc::UnboundedSender<P2PEvent>,
     engine: &mut ContributionEngine,
-) -> DirectResponse {
+) -> (DirectResponse, Option<DirectRequest>) {
     tracing::info!(
         target: "resource",
         "📦 ResourceRequest from {from}: consumer={}, cpu={:.1}, mem={}MB",
@@ -335,10 +346,13 @@ pub(crate) fn handle_resource_request(
                 peer_id: from,
                 reason: "no matching resources".into(),
             });
-            return DirectResponse {
-                request_id,
-                status: DirectResponseStatus::Error("no matching resources".into()),
-            };
+            return (
+                DirectResponse {
+                    request_id,
+                    status: DirectResponseStatus::Error("no matching resources".into()),
+                },
+                None,
+            );
         }
 
         let _session_id = engine.sessions.create_session(
@@ -366,10 +380,13 @@ pub(crate) fn handle_resource_request(
             peer_id: from,
             reason: "no resources available".into(),
         });
-        return DirectResponse {
-            request_id,
-            status: DirectResponseStatus::Error("no resources available".into()),
-        };
+        return (
+            DirectResponse {
+                request_id,
+                status: DirectResponseStatus::Error("no resources available".into()),
+            },
+            None,
+        );
     };
 
     tracing::info!(
@@ -384,12 +401,12 @@ pub(crate) fn handle_resource_request(
         session_id: offer.provider_id.clone(),
     });
 
-    // Encode offer in response status (workaround: DirectResponse doesn't carry data payloads)
-    let offer_json = serde_json::to_vec(&offer).unwrap_or_default();
-    DirectResponse {
-        request_id,
-        status: DirectResponseStatus::Error(String::from_utf8_lossy(&offer_json).into()),
-    }
+    // Send offer as a separate DirectRequest (not in response Error field)
+    let offer_request = direct::resource_offer_request(offer);
+    (
+        direct::ok_response(request_id),
+        Some(offer_request),
+    )
 }
 
 /// Consumer side: handle a ResourceOffer from a provider.
@@ -522,6 +539,50 @@ pub(crate) fn handle_resource_release(
         peer_id: from,
         session_id: receipt.session_id.clone(),
         contribution_delta,
+    });
+
+    direct::ok_response(request_id)
+}
+// Resource reject handler (Phase 3)
+// ═══════════════════════════════════════════════════════════════
+
+/// Provider side: handle a ResourceReject from a consumer.
+///
+/// Releases the reserved resources back to available. The session
+/// is transitioned from Pending to Released.
+pub(crate) fn handle_resource_reject(
+    from: PeerId,
+    _rejected_req_id: String,
+    reason: RejectReason,
+    request_id: u64,
+    event_tx: &mpsc::UnboundedSender<P2PEvent>,
+    engine: &mut ContributionEngine,
+) -> DirectResponse {
+    tracing::info!(
+        target: "resource",
+        "🚫 ResourceReject from {from}: reason={reason}",
+    );
+
+    // Find and release the pending session for this consumer.
+    let pending = engine.sessions.list_by_status(crate::resource::SessionStatus::Pending);
+    let mut found_sid = String::new();
+    for session in pending {
+        if session.consumer == from.to_string() {
+            found_sid = session.session_id.clone();
+            break;
+        }
+    }
+
+    if !found_sid.is_empty() {
+        engine.sessions.release(&found_sid);
+        tracing::info!(target: "resource", "🚫 released reserved session {found_sid} after reject");
+    } else {
+        tracing::debug!(target: "resource", "🚫 no pending session to release for {from}");
+    }
+
+    let _ = event_tx.send(P2PEvent::ResourceRequestFailed {
+        peer_id: from,
+        reason: format!("rejected: {reason}"),
     });
 
     direct::ok_response(request_id)
@@ -699,6 +760,8 @@ mod tests {
             required_features: vec![],
             duration_ms: 60_000,
             priority: 75,
+            request_id: String::new(),
+            expires_at: 0,
         }
     }
 
@@ -708,8 +771,9 @@ mod tests {
         let request = make_request();
         let (tx, _rx) = mpsc::unbounded_channel();
 
-        let response = handle_resource_request(PeerId::random(), request, 42, &tx, &mut engine);
+        let (response, offer_req) = handle_resource_request(PeerId::random(), request, 42, &tx, &mut engine);
         assert!(matches!(response.status, DirectResponseStatus::Error(_)));
+        assert!(offer_req.is_none());
     }
 
     #[test]
@@ -718,9 +782,18 @@ mod tests {
         let request = make_request();
         let (tx, _rx) = mpsc::unbounded_channel();
 
-        let response = handle_resource_request(PeerId::random(), request, 42, &tx, &mut engine);
-        // Offer encoded in Error field (workaround)
-        assert!(matches!(response.status, DirectResponseStatus::Error(_)));
+        let (response, offer_req) = handle_resource_request(PeerId::random(), request, 42, &tx, &mut engine);
+        // Now returns Ok response + separate offer request
+        assert!(matches!(response.status, DirectResponseStatus::Ok));
+        assert!(offer_req.is_some());
+        match offer_req.unwrap().payload {
+            DirectPayload::ResourceOffer { offer } => {
+                assert_eq!(offer.provider_id, "did:walkie:provider");
+                assert!(offer.cpu_amount >= 0.2);
+                assert!(offer.memory_amount_mb >= 1024);
+            }
+            _ => panic!("expected ResourceOffer payload"),
+        }
 
         let pending = engine.sessions.list_by_status(crate::resource::SessionStatus::Pending);
         assert_eq!(pending.len(), 1);
@@ -734,7 +807,7 @@ mod tests {
         let from = PeerId::random();
         request.consumer_id = from.to_string();
 
-        handle_resource_request(from, request, 1, &tx, &mut engine);
+        let (_response, _offer_req) = handle_resource_request(from, request, 1, &tx, &mut engine);
 
         let response = handle_resource_accept(from, "accept-x".into(), 2, &tx, &mut engine);
         assert!(matches!(response.status, DirectResponseStatus::Ok));
@@ -751,7 +824,7 @@ mod tests {
         let from = PeerId::random();
         request.consumer_id = from.to_string();
 
-        handle_resource_request(from, request.clone(), 1, &tx, &mut engine);
+        let (_response, _offer_req) = handle_resource_request(from, request.clone(), 1, &tx, &mut engine);
         handle_resource_accept(from, "accept-x".into(), 2, &tx, &mut engine);
 
         let active = engine.sessions.list_by_status(crate::resource::SessionStatus::Active);

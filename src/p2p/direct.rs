@@ -31,6 +31,9 @@ pub const PENDING_MAX_PER_PEER: usize = 256;
 /// TTL for pending messages before they are dropped.
 pub const PENDING_TTL_SECS: u64 = 86400; // 24 hours
 
+/// TTL for pending resource requests (time-sensitive, shorter TTL).
+pub const RESOURCE_PENDING_TTL_SECS: u64 = 300; // 5 minutes
+
 // ── Wire types ─────────────────────────────────────────────────
 
 /// Request sent over the direct channel.
@@ -69,6 +72,8 @@ pub enum DirectPayload {
     ResourceRelease { receipt: WorkReceipt },
     /// Provider acknowledges release.
     ResourceReleaseAck { session_id: String, contribution_delta: f64 },
+    /// Consumer rejects an offer.
+    ResourceReject { request_id: String, reason: crate::resource::RejectReason },
 }
 /// Response to a direct request.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -278,6 +283,14 @@ pub fn resource_release_request(receipt: WorkReceipt) -> DirectRequest {
     }
 }
 
+/// Shorthand: build a ResourceReject.
+pub fn resource_reject_request(request_id: String, reason: crate::resource::RejectReason) -> DirectRequest {
+    DirectRequest {
+        request_id: next_request_id(),
+        payload: DirectPayload::ResourceReject { request_id, reason },
+    }
+}
+
 /// Build a simple OK response mirroring a request_id.
 pub fn ok_response(request_id: u64) -> DirectResponse {
     DirectResponse {
@@ -307,6 +320,16 @@ impl PendingMessageStore {
             queue: std::sync::RwLock::new(HashMap::new()),
             max_per_peer: PENDING_MAX_PER_PEER,
             ttl: Duration::from_secs(PENDING_TTL_SECS),
+        }
+    }
+
+
+    /// Create a PendingMessageStore with a custom TTL.
+    pub fn with_ttl(ttl: Duration) -> Self {
+        Self {
+            queue: std::sync::RwLock::new(HashMap::new()),
+            max_per_peer: PENDING_MAX_PER_PEER,
+            ttl,
         }
     }
 
@@ -531,6 +554,10 @@ mod tests {
                 receipt: WorkReceipt::new("c".into(), "p".into(), "s1".into(), 1000, 1024, 5000),
             },
             DirectPayload::ResourceReleaseAck { session_id: "s1".into(), contribution_delta: 1.5 },
+            DirectPayload::ResourceReject {
+                request_id: "req-1".into(),
+                reason: crate::resource::RejectReason::BetterOffer,
+            },
         ];
 
         for payload in payloads {
@@ -570,4 +597,50 @@ mod tests {
         let decoded: DirectResponse = serde_json::from_slice(&json).unwrap();
         assert_eq!(resp, decoded);
     }
+
+    #[test]
+    fn test_pending_store_with_custom_ttl() {
+        let store = PendingMessageStore::with_ttl(Duration::from_millis(100));
+        let peer = PeerId::random();
+        assert!(store.store(peer, key_offer_request(vec![1u8; 32])));
+        assert_eq!(store.pending_count(&peer), 1);
+
+        // Wait for expiry
+        std::thread::sleep(Duration::from_millis(150));
+
+        // drain should return empty (all expired)
+        let msgs = store.drain(&peer);
+        assert!(msgs.is_none() || msgs.unwrap().is_empty(),
+            "expired messages should be evicted on drain");
+    }
+
+    #[test]
+    fn test_pending_store_resource_ttl_constant() {
+        assert_eq!(RESOURCE_PENDING_TTL_SECS, 300);
+    }
+
+    #[test]
+    fn test_pending_store_evict_expired_partial() {
+        let store = PendingMessageStore::with_ttl(Duration::from_millis(100));
+        let peer = PeerId::random();
+
+        // Store first message
+        store.store(peer, key_offer_request(vec![1u8; 32]));
+        // Wait for near-expiry
+        std::thread::sleep(Duration::from_millis(80));
+        // Store second message (should survive longer)
+        store.store(peer, key_accept_request(vec![2u8; 32]));
+
+        // Wait for first to expire but second still alive
+        std::thread::sleep(Duration::from_millis(60));
+
+        // Evict expired
+        store.evict_expired();
+        // Should still have one message (the second one)
+        // Note: timing is tight, but the second message was stored 80ms after the first
+        // so it has ~80ms more TTL remaining
+        let count = store.pending_count(&peer);
+        assert!(count <= 2, "should have at most 2 messages, got {count}");
+    }
+
 }

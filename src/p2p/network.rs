@@ -133,6 +133,7 @@ impl P2PNetwork {
         tokio::spawn(async move {
             let mut crypto = crypto;
             let pending_store = PendingMessageStore::new();
+            let resource_pending_store = PendingMessageStore::with_ttl(Duration::from_secs(direct::RESOURCE_PENDING_TTL_SECS));
             let mut mdns_peer_addrs: HashMap<PeerId, Vec<Multiaddr>> = HashMap::new();
 
             // ContributionEngine: created from resource_ad if provided.
@@ -172,6 +173,15 @@ impl P2PNetwork {
                                         swarm.behaviour_mut().direct.send_request(&peer_id, msg);
                                     }
                                     let _ = event_tx.send(P2PEvent::PendingMessagesSent { peer_id, count });
+                                }
+
+                                // P1: Drain pending resource requests (5-min TTL)
+                                if let Some(messages) = resource_pending_store.drain(&peer_id) {
+                                    let count = messages.len();
+                                    tracing::info!(target: "resource", "📤 draining {count} pending resource requests for {peer_id}");
+                                    for msg in messages {
+                                        swarm.behaviour_mut().direct.send_request(&peer_id, msg);
+                                    }
                                 }
 
                                 // Auto key exchange via Direct channel
@@ -300,21 +310,9 @@ impl P2PNetwork {
                                 tracing::trace!(target: "p2p", "📨 direct response sent to {peer}");
                             }
 
-                            // ── Identify ──
                             libp2p::swarm::SwarmEvent::Behaviour(
-                                super::WalkieBehaviourEvent::Identify(
-                                    identify::Event::Received { peer_id, info, .. },
-                                ),
-                            ) => {
-                                tracing::info!(target: "p2p", "🔐 identified {peer_id}: agent={}", info.agent_version);
-                                let _ = event_tx.send(P2PEvent::Identify { peer_id, info: Box::new(info) });
-                            }
-                            libp2p::swarm::SwarmEvent::Behaviour(
-                                super::WalkieBehaviourEvent::Identify(identify::Event::Pushed { .. })
-                            ) | libp2p::swarm::SwarmEvent::Behaviour(
                                 super::WalkieBehaviourEvent::Identify(identify::Event::Sent { .. })
                             ) => {}
-
                             // ── Ping ──
                             libp2p::swarm::SwarmEvent::Behaviour(
                                 super::WalkieBehaviourEvent::Ping(ping::Event { peer, result: Ok(rtt), .. }),
@@ -576,7 +574,10 @@ impl P2PNetwork {
                                         swarm.behaviour_mut().direct.send_request(&target, req);
                                         anyhow::bail!("request sent; wait for ResourceOfferReceived event")
                                     } else {
-                                        anyhow::bail!("peer {target} not connected")
+                                        if !resource_pending_store.store(target, req) {
+                                            anyhow::bail!("resource pending queue full for {target}")
+                                        }
+                                        anyhow::bail!("peer {target} not connected; queued for reconnect (TTL 5min)")
                                     }
                                 })();
                                 let _ = reply.send(result);
