@@ -24,6 +24,8 @@ pub struct P2PConfig {
     /// Our resource advertisement. If set, auto-declare to peers via Direct
     /// channel after key exchange completes.
     pub resource_ad: Option<ResourceAdvertisement>,
+    /// Ed25519 signing key for re-signing resource ads after bump.
+    pub signing_key: Option<std::sync::Arc<ed25519_dalek::SigningKey>>,
 }
 
 impl Default for P2PConfig {
@@ -39,6 +41,7 @@ impl Default for P2PConfig {
             auto_key_exchange: true,
             agent_identity: None,
             resource_ad: None,
+            signing_key: None,
         }
     }
 }
