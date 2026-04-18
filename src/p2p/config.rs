@@ -1,9 +1,9 @@
 //! P2P configuration and internal commands.
 
+use super::direct::DirectRequest;
 use crate::identity::AgentIdentity;
 use crate::protocol::AgentMessage;
-use crate::resource::{ResourceAdvertisement, ResourceRequest, ResourceOffer};
-use super::direct::DirectRequest;
+use crate::resource::{ResourceAdvertisement, ResourceOffer, ResourceRequest};
 
 // ─── Configuration ───────────────────────────────────────────────
 
@@ -12,6 +12,11 @@ use super::direct::DirectRequest;
 pub struct P2PConfig {
     pub listen_on: Vec<String>,
     pub bootstrap_peers: Vec<String>,
+    /// Relay peer multiaddresses (e.g. "/ip4/1.2.3.4/tcp/4001/p2p/12D3KooW...").
+    /// Connected on startup to enable NAT traversal fallback.
+    pub relay_peers: Vec<String>,
+    /// Act as a relay server — accept reservations and relay traffic for other peers.
+    pub relay_server: bool,
     pub enable_mdns: bool,
     pub agent_version: Option<String>,
     pub idle_timeout_secs: u64,
@@ -33,6 +38,8 @@ impl Default for P2PConfig {
         Self {
             listen_on: vec!["/ip4/0.0.0.0/tcp/0".to_string()],
             bootstrap_peers: vec![],
+            relay_peers: vec![],
+            relay_server: false,
             enable_mdns: true,
             agent_version: Some("walkie-talkie-core/0.3.0".to_string()),
             idle_timeout_secs: 60,
@@ -137,13 +144,13 @@ pub(crate) enum P2PCommand {
         request: ResourceRequest,
         reply: tokio::sync::oneshot::Sender<anyhow::Result<ResourceOffer>>,
     },
-        Shutdown,
+    Shutdown,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::resource::{ResourceSpec, now_ms};
+    use crate::resource::{now_ms, ResourceSpec};
 
     #[test]
     fn test_default_config() {
@@ -179,6 +186,9 @@ mod tests {
             ..P2PConfig::default()
         };
         assert!(config.resource_ad.is_some());
-        assert_eq!(config.resource_ad.as_ref().unwrap().agent_id, "did:walkie:test");
+        assert_eq!(
+            config.resource_ad.as_ref().unwrap().agent_id,
+            "did:walkie:test"
+        );
     }
 }

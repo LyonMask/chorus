@@ -213,6 +213,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
             P2PEvent::IdentityAttestationVerified { peer_id, did } => {
                 println!("🔐 Identity attestation verified {peer_id}: {did}");
             }
+            P2PEvent::RelayReservationAccepted { relay_peer_id } => {
+                println!("🔌 Relay reservation accepted: {relay_peer_id}");
+            }
+            P2PEvent::RelayConnectionUpgraded { peer_id } => {
+                println!("🔨 Direct connection upgraded (hole punch): {peer_id}");
+            }
         }
     }
 
