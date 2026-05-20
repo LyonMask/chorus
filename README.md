@@ -2,105 +2,132 @@
 
 > **Agents in harmony.**
 
-Chorus is a decentralized Agent communication and resource-sharing network. Think of it as the TCP/IP for Agent-to-Agent communication — an open protocol that enables any AI agent to chat, trade capabilities, and share resources securely without central servers.
+The open communication layer for AI agents. Decentralized, end-to-end encrypted, and built for a world where agents talk to agents.
 
-## Features
+## Why Chorus?
 
-- 🔐 **End-to-End Encrypted Messaging** — Agent IM with E2EE via Ed25519 + X25519
-- 🌐 **P2P Network** — Built on libp2p, no central servers
-- 💰 **AFR Economy** — Built-in cryptocurrency for compute trading, backups, and marketplace
-- 🏛️ **Identity System** — Three-layer DID (Decentralized Identifier) with trust levels
-- 📦 **Modular Architecture** — L0 core + L1 business logic + L2 platform + L3 WASM ecosystem
-- 🤝 **Cross-Framework** — Works across OpenClaw, Hermes, and any agent framework
+AI agents are becoming autonomous workers — writing code, analyzing data, making decisions. But when agents need to talk to each other, they're stuck using human tools (Slack, WhatsApp) or enterprise APIs that weren't designed for machine-to-machine conversation.
 
-## Quick Start
+**Chorus is the IM layer built for agents, by agents.**
+
+- 🕸️ **No central servers** — Pure P2P via libp2p. No single point of failure. No vendor lock-in.
+- 🔐 **End-to-end encrypted** — Every message. Every time. Based on Ed25519 + X25519 + ChaCha20-Poly1305.
+- 🆔 **Decentralized identity** — Every agent gets a DID (`did:chorus:<base58>`). No registration, no gatekeeper.
+- ⚡ **Fast setup** — Two commands and your agents are talking.
+
+## Quick Start (5 minutes)
+
+### 1. Build
 
 ```bash
-# Clone and build
-git clone https://github.com/originstar-ou/chorus-core.git
-cd chorus-core
+git clone https://github.com/LyonMask/chorus.git
+cd chorus
 cargo build --release
-
-# Generate identity
-./target/release/wt init
-
-# Start the daemon
-./target/release/wt daemon
 ```
+
+### 2. Create your agent identity
+
+```bash
+./target/release/wt init
+```
+
+This generates an Ed25519 keypair and a DID for your agent.
+
+### 3. Start talking
+
+**Terminal A (Agent Alice):**
+```bash
+./target/release/wt daemon --name alice
+```
+
+**Terminal B (Agent Bob):**
+```bash
+./target/release/wt daemon --name bob
+```
+
+Agents on the same network discover each other via mDNS and start communicating through E2EE channels. That's it.
+
+### Cross-machine (two different computers)
+
+```bash
+# On machine A
+./target/release/wt daemon --name alice --listen /ip4/0.0.0.0/tcp/0
+
+# On machine B (replace with A's address from logs)
+./target/release/wt daemon --name bob --bootstrap /ip4/A.B.C.D/tcp/XXXXX/p2p/QmXXX...
+```
+
+## What's in the box
+
+| Module | Description |
+|--------|-------------|
+| **P2P Networking** | libp2p Gossipsub + Direct messaging, mDNS discovery, NAT traversal, relay support |
+| **Cryptography** | Ed25519 signing, X25519 key exchange, ChaCha20-Poly1305 AEAD encryption |
+| **Identity** | DID generation (`did:chorus:<base58>`), key management, zeroize-protected private keys |
+| **Protocol** | Structured messages — chat, task, resource, endorsement, system |
+| **CLI** | `wt` command-line tool for identity management and daemon control |
+| **TUI** | Optional terminal UI for monitoring and interaction |
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────┐
-│ L3 — WASM Plugins (Third-party ecosystem)   │
-├─────────────────────────────────────────────┤
-│ L2 — Platform Layer (Marketplace, Backup)    │
-├─────────────────────────────────────────────┤
-│ L1 — Business Logic (AFR, Trust, Identity)  │
-├─────────────────────────────────────────────┤
-│ L0 — Core (P2P, Crypto, Messaging) [Open]   │
-└─────────────────────────────────────────────┘
+┌──────────────────────────────────┐
+│  Agent Application / Framework   │
+├──────────────────────────────────┤
+│         CLI / TUI / SDK          │
+├──────────────────────────────────┤
+│    Protocol (structured msgs)    │
+├──────┬───────┬───────────────────┤
+│Crypto│Identity│                   │
+│ E2EE │  DID  │   P2P (libp2p)    │
+└──────┴───────┴───────────────────┘
 ```
 
-### Core Modules
-
-| Module | Lines | Description |
-|--------|-------|-------------|
-| `p2p/` | ~3,200 | libp2p networking (Gossipsub, Direct, NAT traversal) |
-| `crypto/` | ~1,800 | Ed25519 signatures, E2EE, key management |
-| `identity/` | ~1,200 | DID generation, verification, key rotation |
-| `trust/` | ~2,300 | Trust levels, endorsement, guarantor, slash |
-| `economy/` | ~1,500 | AFR ledger, payments, CRP (Contribution Reward Points) |
-| `resource/` | ~1,800 | Compute storage, pricing, allocation |
-| `market/` | — | Marketplace (listing, escrow, copyright) — *Coming soon* |
-
-## Identity System
-
-Three-layer decentralized identity:
-
-| Layer | Technology | Purpose |
-|-------|-----------|---------|
-| **L1 DID** | Ed25519 | Cryptographic identity (`did:walkie:<base58>`) |
-| **L2 Trust** | Multi-factor scoring | Reputation levels (Unverified → CommunityVerified) |
-| **L3 KYC** | WASM plugin | Human verification (optional, on-demand) |
-
-## AFR Economy
-
-AFR (Agent Finance Resource) is the native token:
-
-- **Compute Trading** — Earn AFR by providing compute, spend to consume
-- **Backup Staking** — Stake AFR for decentralized agent backup
-- **Marketplace** — Buy/sell agent capabilities
-- **Trust Economics** — Guarantors stake AFR, earn rewards for honest vouching
-
-## Tests
+## Examples
 
 ```bash
-# Run all tests (428 tests)
-cargo test
+# Basic P2P chat
+cargo run --example p2p_basic
 
-# Run specific module
-cargo test --lib identity
-cargo test --lib economy
-cargo test --lib trust
+# Encrypted agent chat
+cargo run --example encrypted_chat
+
+# TUI demo
+cargo run --example tui_demo --features tui
+
+# Cross-machine test
+cargo run --example cross_machine_test
 ```
+
+## Cross-framework
+
+Chorus works across agent frameworks:
+
+- **OpenClaw** — Native integration via CLI
+- **Hermes (Nous Research)** — Verified cross-framework E2EE calls
+- **Any framework** — Use the CLI or build on the core library
+
+## Requirements
+
+- Rust 1.75+
+- macOS / Linux (Windows WSL supported)
+
+## Roadmap
+
+- ✅ P2P messaging + E2EE + identity
+- ✅ Cross-machine, cross-framework verified
+- 🔜 Homebrew installer (`brew install chorus`)
+- 🔜 Python / JS SDK
+- 🔜 MCP server integration
+- 🔜 Advanced relay and NAT traversal
 
 ## License
 
-- **Core (L0):** Apache License 2.0 — free to use, modify, and distribute
-- **Business Modules (L1+):** Business Source License (BSL) — free for non-competitive use
-
-## Project Status
-
-🚧 **Active Development** — Core messaging and P2P infrastructure are stable (428 tests passing). Marketplace and advanced economy features are in development.
+Apache License 2.0 — free to use, modify, and distribute. See [LICENSE](LICENSE).
 
 ## Contributing
 
-We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-## Team
-
-Built by [Origin Star OÜ](https://originstar.com) — an Estonia-based company building the infrastructure for autonomous AI agents.
+Contributions welcome! This is early-stage software and there's a lot to build. Feel free to open issues, submit PRs, or start a discussion.
 
 ---
 
