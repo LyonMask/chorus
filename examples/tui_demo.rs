@@ -25,10 +25,10 @@ use ratatui::{
     Frame, Terminal,
 };
 
-use walkie_talkie_core::identity::IdentityBuilder;
-use walkie_talkie_core::p2p::{P2PConfig, P2PEvent, P2PNetwork};
-use walkie_talkie_core::tui::{Key, TuiApp};
-use walkie_talkie_core::protocol::AgentMessage;
+use chorus_core::identity::IdentityBuilder;
+use chorus_core::p2p::{P2PConfig, P2PEvent, P2PNetwork};
+use chorus_core::tui::{Key, TuiApp};
+use chorus_core::protocol::AgentMessage;
 
 // ─── Key Mapping ────────────────────────────────────────────────
 
@@ -62,8 +62,8 @@ fn draw(f: &mut Frame, app: &TuiApp) {
     draw_status(f, app, chunks[0]);
 
     match app.mode {
-        walkie_talkie_core::tui::AppMode::Dashboard => draw_dashboard(f, app, chunks[1]),
-        walkie_talkie_core::tui::AppMode::AlertDetail => draw_alerts(f, app, chunks[1]),
+        chorus_core::tui::AppMode::Dashboard => draw_dashboard(f, app, chunks[1]),
+        chorus_core::tui::AppMode::AlertDetail => draw_alerts(f, app, chunks[1]),
     }
 
     draw_help(f, app, chunks[2]);
@@ -118,10 +118,10 @@ fn draw_dashboard(f: &mut Frame, app: &TuiApp, area: ratatui::layout::Rect) {
     // ── Activity Feed ──
     let feed_items: Vec<ListItem> = app.activities.iter().rev().take(50).map(|item| {
         let color = match item.action {
-            walkie_talkie_core::tui::ActivityAction::HumanEscalation => Color::Red,
-            walkie_talkie_core::tui::ActivityAction::TaskAssigned => Color::Yellow,
-            walkie_talkie_core::tui::ActivityAction::TaskCompleted => Color::Green,
-            walkie_talkie_core::tui::ActivityAction::TaskFailed => Color::Red,
+            chorus_core::tui::ActivityAction::HumanEscalation => Color::Red,
+            chorus_core::tui::ActivityAction::TaskAssigned => Color::Yellow,
+            chorus_core::tui::ActivityAction::TaskCompleted => Color::Green,
+            chorus_core::tui::ActivityAction::TaskFailed => Color::Red,
             _ => Color::Gray,
         };
         ListItem::new(vec![
@@ -154,13 +154,13 @@ fn draw_alerts(f: &mut Frame, app: &TuiApp, area: ratatui::layout::Rect) {
     // ── Alert List ──
     let alert_items: Vec<ListItem> = app.alerts.iter().enumerate().map(|(i, a)| {
         let (icon, style) = match a.status {
-            walkie_talkie_core::tui::AlertStatus::Pending =>
+            chorus_core::tui::AlertStatus::Pending =>
                 ("🚨", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
-            walkie_talkie_core::tui::AlertStatus::Approved =>
+            chorus_core::tui::AlertStatus::Approved =>
                 ("✅", Style::default().fg(Color::Green)),
-            walkie_talkie_core::tui::AlertStatus::Rejected =>
+            chorus_core::tui::AlertStatus::Rejected =>
                 ("❌", Style::default().fg(Color::Red)),
-            walkie_talkie_core::tui::AlertStatus::Dismissed =>
+            chorus_core::tui::AlertStatus::Dismissed =>
                 ("⬜", Style::default().fg(Color::DarkGray)),
         };
         let selected = i == app.selected_alert;
@@ -187,10 +187,10 @@ fn draw_alerts(f: &mut Frame, app: &TuiApp, area: ratatui::layout::Rect) {
     if let Some(alert) = app.alerts.get(app.selected_alert) {
         let is_pending = alert.is_pending();
         let (status_str, status_color) = match alert.status {
-            walkie_talkie_core::tui::AlertStatus::Pending => ("⏳ PENDING", Color::Yellow),
-            walkie_talkie_core::tui::AlertStatus::Approved => ("✅ APPROVED", Color::Green),
-            walkie_talkie_core::tui::AlertStatus::Rejected => ("❌ REJECTED", Color::Red),
-            walkie_talkie_core::tui::AlertStatus::Dismissed => ("⬜ DISMISSED", Color::DarkGray),
+            chorus_core::tui::AlertStatus::Pending => ("⏳ PENDING", Color::Yellow),
+            chorus_core::tui::AlertStatus::Approved => ("✅ APPROVED", Color::Green),
+            chorus_core::tui::AlertStatus::Rejected => ("❌ REJECTED", Color::Red),
+            chorus_core::tui::AlertStatus::Dismissed => ("⬜ DISMISSED", Color::DarkGray),
         };
 
         let detail_chunks = Layout::default()
@@ -233,8 +233,8 @@ fn draw_alerts(f: &mut Frame, app: &TuiApp, area: ratatui::layout::Rect) {
 
 fn draw_help(f: &mut Frame, app: &TuiApp, area: ratatui::layout::Rect) {
     let text = match app.mode {
-        walkie_talkie_core::tui::AppMode::Dashboard => " [A] Alerts  [Q] Quit ",
-        walkie_talkie_core::tui::AppMode::AlertDetail => " [Y] Approve  [N] Reject  [X] Dismiss  [↑↓] Navigate  [D] Back  [Q] Quit ",
+        chorus_core::tui::AppMode::Dashboard => " [A] Alerts  [Q] Quit ",
+        chorus_core::tui::AppMode::AlertDetail => " [Y] Approve  [N] Reject  [X] Dismiss  [↑↓] Navigate  [D] Back  [Q] Quit ",
     };
     f.render_widget(Paragraph::new(text).style(Style::default().fg(Color::Gray)), area);
 }
@@ -275,8 +275,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             app.add_agent(&peer_id.to_string(),
                                 &format!("Agent-{}", &peer_id.to_string()[..8]),
                                 &format!("did:walkie:{}", &peer_id.to_string()[..12]));
-                            app.push_activity(walkie_talkie_core::tui::ActivityItem::new(
-                                "System", walkie_talkie_core::tui::ActivityAction::Connected,
+                            app.push_activity(chorus_core::tui::ActivityItem::new(
+                                "System", chorus_core::tui::ActivityAction::Connected,
                                 &format!("Peer {} connected", &peer_id.to_string()[..16])));
                         }
                         P2PEvent::PeerDisconnected { peer_id } => {
@@ -299,8 +299,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             app.update_agent_from_identity(&peer_id.to_string(), &identity);
                         }
                         P2PEvent::Listening { address } => {
-                            app.push_activity(walkie_talkie_core::tui::ActivityItem::new(
-                                "System", walkie_talkie_core::tui::ActivityAction::SystemInfo,
+                            app.push_activity(chorus_core::tui::ActivityItem::new(
+                                "System", chorus_core::tui::ActivityAction::SystemInfo,
                                 &format!("📡 Listening on {}", address)));
                         }
                         _ => {}

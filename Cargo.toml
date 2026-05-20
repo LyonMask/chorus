@@ -1,11 +1,13 @@
 [package]
-name = "walkie-talkie-core"
-version = "0.3.0"
+name = "chorus-core"
+version = "0.1.0-alpha"
 edition = "2021"
+license = "Apache-2.0"
+description = "E2EE P2P agent mesh — crypto, identity, structured messaging"
+repository = "https://github.com/LyonMask/chorus"
 
 [features]
 default = []
-napi-binding = ["dep:napi", "dep:napi-derive", "dep:napi-build"]
 tui = ["dep:ratatui", "dep:crossterm"]
 
 [dependencies]
@@ -13,6 +15,7 @@ libp2p = { version = "0.54", features = [
     "tcp", "tokio", "noise", "yamux", "macros",
     "identify", "ping", "gossipsub", "mdns",
     "request-response",
+    "relay", "dcutr",
 ] }
 tokio = { version = "1", features = ["full"] }
 x25519-dalek = { version = "2.0", features = ["static_secrets"] }
@@ -23,53 +26,26 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-
 clap = { version = "4", features = ["derive"] }
 dirs = "5"
 hostname = "0.4"
 thiserror = "1.0"
 anyhow = "1.0"
-napi = { version = "2", features = ["async"], optional = true }
-napi-derive = { version = "2", optional = true }
 ed25519-dalek = { version = "2.1", features = ["rand_core"] }
 base64 = "0.22"
-axum = "0.7"
 ratatui = { version = "0.28", optional = true }
 crossterm = { version = "0.28", optional = true }
 secrecy = "0.10"
 async-trait = "0.1"
 zeroize = { version = "1", features = ["derive"] }
-blake3 = "1"
-
-[build-dependencies]
-napi-build = { version = "2", optional = true }
 
 [dev-dependencies]
 tokio-test = "0.4"
-criterion = { version = "0.5", features = ["async_tokio"] }
-
-[[bench]]
-name = "crypto_bench"
-harness = false
-
-[[bench]]
-name = "protocol_bench"
-harness = false
-
-[[bench]]
-name = "multi_node_sim"
-harness = false
 
 [[example]]
 name = "walkie_tui"
 required-features = ["tui"]
 
 [[example]]
-name = "headless_demo"
-
-[[example]]
 name = "tui_demo"
 required-features = ["tui"]
-
-[[example]]
-name = "sdk_openclaw_agent"

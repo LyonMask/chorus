@@ -1,7 +1,7 @@
 //! Direct channel — point-to-point request-response protocol.
 //!
-//! Messages that must not be broadcast (key exchange, DMs, identity claims,
-//! resource declarations) are routed through this channel instead of Gossipsub.
+//! Messages that must not be broadcast (key exchange, DMs, identity claims)
+//! are routed through this channel instead of Gossipsub.
 
 use futures::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use libp2p::request_response::{self, Codec, ProtocolSupport};
@@ -11,8 +11,6 @@ use std::{
     time::{Duration, Instant},
 };
 use libp2p::PeerId;
-
-use crate::resource::{ResourceAdvertisement, ResourceRequest, ResourceOffer, WorkReceipt};
 
 // ── Protocol constants ─────────────────────────────────────────
 
@@ -30,9 +28,6 @@ pub const PENDING_MAX_PER_PEER: usize = 256;
 
 /// TTL for pending messages before they are dropped.
 pub const PENDING_TTL_SECS: u64 = 86400; // 24 hours
-
-/// TTL for pending resource requests (time-sensitive, shorter TTL).
-pub const RESOURCE_PENDING_TTL_SECS: u64 = 300; // 5 minutes
 
 // ── Wire types ─────────────────────────────────────────────────
 
@@ -56,37 +51,8 @@ pub enum DirectPayload {
     Encrypted { ciphertext: Vec<u8> },
     /// Agent identity claim sent inside an established E2EE session.
     IdentityClaim { identity_json: Vec<u8> },
-    /// Resource declaration: node advertises its available resources.
-    ResourceDeclaration {
-        advertisement: ResourceAdvertisement,
-    },
-    /// Consumer requests resources from provider.
-    ResourceRequest { request: ResourceRequest },
-    /// Provider responds with an offer (or rejection).
-    ResourceOffer { offer: ResourceOffer },
-    /// Consumer accepts an offer.
-    ResourceAccept { session_id: String },
-    /// Provider confirms session activated.
-    ResourceSessionActivated { session_id: String, expires_at: u64 },
-    /// Consumer releases resources, sends WorkReceipt.
-    ResourceRelease { receipt: WorkReceipt },
-    /// Provider acknowledges release.
-    ResourceReleaseAck { session_id: String, contribution_delta: f64 },
-    /// Consumer rejects an offer.
-    ResourceReject { request_id: String, reason: crate::resource::RejectReason },
-    /// PeerId↔DID identity attestation (Phase 4).
-    IdentityAttestation { attestation_json: Vec<u8> },
-    /// Guarantee request — ask a guarantor to vouch for us (Phase 4.1).
-    GuaranteeRequest { cert_json: Vec<u8> },
-    /// Guarantee response — guarantor confirms or rejects (Phase 4.1).
-    GuaranteeResponse { accepted: bool, reason: String },
-    /// Slash notice — broadcast punishment notification (Phase 4.1).
-    SlashNotice { slash_json: Vec<u8> },
-    /// Payment request from provider to consumer (Phase 4.1).
-    PaymentRequest { payment_request_json: Vec<u8> },
-    /// Payment response from consumer to provider (Phase 4.1).
-    PaymentResponse { payment_response_json: Vec<u8> },
 }
+
 /// Response to a direct request.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct DirectResponse {
@@ -254,55 +220,6 @@ pub fn identity_claim_request(identity_json: Vec<u8>) -> DirectRequest {
     }
 }
 
-/// Shorthand: build a ResourceDeclaration request.
-pub fn resource_declaration_request(ad: ResourceAdvertisement) -> DirectRequest {
-    DirectRequest {
-        request_id: next_request_id(),
-        payload: DirectPayload::ResourceDeclaration { advertisement: ad },
-    }
-}
-
-
-/// Shorthand: build a ResourceRequest.
-pub fn resource_request_request(request: ResourceRequest) -> DirectRequest {
-    DirectRequest {
-        request_id: next_request_id(),
-        payload: DirectPayload::ResourceRequest { request },
-    }
-}
-
-/// Shorthand: build a ResourceOffer.
-pub fn resource_offer_request(offer: ResourceOffer) -> DirectRequest {
-    DirectRequest {
-        request_id: next_request_id(),
-        payload: DirectPayload::ResourceOffer { offer },
-    }
-}
-
-/// Shorthand: build a ResourceAccept.
-pub fn resource_accept_request(session_id: String) -> DirectRequest {
-    DirectRequest {
-        request_id: next_request_id(),
-        payload: DirectPayload::ResourceAccept { session_id },
-    }
-}
-
-/// Shorthand: build a ResourceRelease.
-pub fn resource_release_request(receipt: WorkReceipt) -> DirectRequest {
-    DirectRequest {
-        request_id: next_request_id(),
-        payload: DirectPayload::ResourceRelease { receipt },
-    }
-}
-
-/// Shorthand: build a ResourceReject.
-pub fn resource_reject_request(request_id: String, reason: crate::resource::RejectReason) -> DirectRequest {
-    DirectRequest {
-        request_id: next_request_id(),
-        payload: DirectPayload::ResourceReject { request_id, reason },
-    }
-}
-
 /// Build a simple OK response mirroring a request_id.
 pub fn ok_response(request_id: u64) -> DirectResponse {
     DirectResponse {
@@ -342,7 +259,6 @@ impl PendingMessageStore {
             ttl: Duration::from_secs(PENDING_TTL_SECS),
         }
     }
-
 
     /// Create a PendingMessageStore with a custom TTL.
     pub fn with_ttl(ttl: Duration) -> Self {
@@ -426,28 +342,6 @@ impl Default for PendingMessageStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::resource::{ResourceSpec, ResourceRequest, ResourceOffer, WorkReceipt, now_ms};
-
-    fn make_test_ad(agent_id: &str) -> ResourceAdvertisement {
-        ResourceAdvertisement {
-            agent_id: agent_id.to_string(),
-            sequence: 1,
-            timestamp: now_ms(),
-            spec: ResourceSpec {
-                cpu_cores: 4,
-                total_memory_mb: 8192,
-                max_bandwidth_up_mbps: 100,
-                total_storage_bytes: 256 * 1024 * 1024 * 1024,
-            },
-            cpu_offer: 0.2,
-            memory_offer_mb: 2048,
-            bandwidth_offer: 5_000_000,
-            storage_offer: 50 * 1024 * 1024 * 1024,
-            features: vec!["always-on".to_string()],
-            signature: Vec::new(),
-            signing_pubkey: Vec::new(),
-        }
-    }
 
     #[test]
     fn test_direct_request_serialization() {
@@ -511,7 +405,6 @@ mod tests {
             let req = key_offer_request(vec![i as u8; 32]);
             assert!(store.store(peer, req));
         }
-        // One more should be rejected
         let req = key_offer_request(vec![255u8; 32]);
         assert!(!store.store(peer, req));
     }
@@ -526,7 +419,6 @@ mod tests {
 
         let msgs = store.drain(&peer).unwrap();
         assert_eq!(msgs.len(), 2);
-
         assert!(store.drain(&peer).is_none());
     }
 
@@ -550,35 +442,6 @@ mod tests {
             DirectPayload::KeyAccept { public_key: vec![2u8; 32] },
             DirectPayload::Encrypted { ciphertext: vec![3u8; 28] },
             DirectPayload::IdentityClaim { identity_json: b"{}".to_vec() },
-            DirectPayload::ResourceDeclaration {
-                advertisement: make_test_ad("did:walkie:test"),
-            },
-
-            DirectPayload::ResourceRequest {
-                request: ResourceRequest::new("consumer".into()),
-            },
-            DirectPayload::ResourceOffer {
-                offer: ResourceOffer {
-                    provider_id: "provider".into(),
-                    consumer_id: "consumer".into(),
-                    cpu_amount: 0.2,
-                    memory_amount_mb: 1024,
-                    bandwidth_amount: 0,
-                    storage_amount: 0,
-                    expires_at: now_ms() + 60_000,
-                    signature: Vec::new(),
-                },
-            },
-            DirectPayload::ResourceAccept { session_id: "sess-1".into() },
-            DirectPayload::ResourceSessionActivated { session_id: "sess-1".into(), expires_at: now_ms() + 60_000 },
-            DirectPayload::ResourceRelease {
-                receipt: WorkReceipt::new("c".into(), "p".into(), "s1".into(), 1000, 1024, 5000),
-            },
-            DirectPayload::ResourceReleaseAck { session_id: "s1".into(), contribution_delta: 1.5 },
-            DirectPayload::ResourceReject {
-                request_id: "req-1".into(),
-                reason: crate::resource::RejectReason::BetterOffer,
-            },
         ];
 
         for payload in payloads {
@@ -589,22 +452,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_resource_declaration_request() {
-        let ad = make_test_ad("did:walkie:test");
-        let req = resource_declaration_request(ad.clone());
-        match req.payload {
-            DirectPayload::ResourceDeclaration { advertisement } => {
-                assert_eq!(advertisement, ad);
-            }
-            _ => panic!("expected ResourceDeclaration payload"),
-        }
-    }
-
     #[tokio::test]
     async fn test_codec_request_response_serialization() {
-        // Test that request and response serialize correctly end-to-end.
-        // The actual stream I/O is handled by libp2p's infrastructure.
         let req = DirectRequest {
             request_id: 42,
             payload: DirectPayload::Encrypted { ciphertext: vec![1, 2, 3] },
@@ -626,18 +475,11 @@ mod tests {
         assert!(store.store(peer, key_offer_request(vec![1u8; 32])));
         assert_eq!(store.pending_count(&peer), 1);
 
-        // Wait for expiry
         std::thread::sleep(Duration::from_millis(150));
 
-        // drain should return empty (all expired)
         let msgs = store.drain(&peer);
         assert!(msgs.is_none() || msgs.unwrap().is_empty(),
             "expired messages should be evicted on drain");
-    }
-
-    #[test]
-    fn test_pending_store_resource_ttl_constant() {
-        assert_eq!(RESOURCE_PENDING_TTL_SECS, 300);
     }
 
     #[test]
@@ -645,23 +487,14 @@ mod tests {
         let store = PendingMessageStore::with_ttl(Duration::from_millis(100));
         let peer = PeerId::random();
 
-        // Store first message
         store.store(peer, key_offer_request(vec![1u8; 32]));
-        // Wait for near-expiry
         std::thread::sleep(Duration::from_millis(80));
-        // Store second message (should survive longer)
         store.store(peer, key_accept_request(vec![2u8; 32]));
 
-        // Wait for first to expire but second still alive
         std::thread::sleep(Duration::from_millis(60));
 
-        // Evict expired
         store.evict_expired();
-        // Should still have one message (the second one)
-        // Note: timing is tight, but the second message was stored 80ms after the first
-        // so it has ~80ms more TTL remaining
         let count = store.pending_count(&peer);
         assert!(count <= 2, "should have at most 2 messages, got {count}");
     }
-
 }

@@ -18,7 +18,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::Notify;
 
-use walkie_talkie_core::p2p::{P2PConfig, P2PEvent, P2PNetwork};
+use chorus_core::p2p::{P2PConfig, P2PEvent, P2PNetwork};
 
 fn now_ms() -> u64 {
     SystemTime::now()

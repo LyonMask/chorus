@@ -9,9 +9,9 @@
 
 use std::time::Duration;
 use tokio::sync::mpsc;
-use walkie_talkie_core::identity::{AgentIdentity, IdentityBuilder};
-use walkie_talkie_core::p2p::{P2PConfig, P2PEvent, P2PNetwork};
-use walkie_talkie_core::protocol::{AgentMessage, MessageProtocol};
+use chorus_core::identity::{AgentIdentity, IdentityBuilder};
+use chorus_core::p2p::{P2PConfig, P2PEvent, P2PNetwork};
+use chorus_core::protocol::{AgentMessage, MessageProtocol};
 
 /// Helper: create a P2PConfig for testing with a specific listen port.
 fn test_config(port: u16) -> P2PConfig {

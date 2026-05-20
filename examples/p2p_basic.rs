@@ -19,7 +19,7 @@ use std::error::Error;
 
 use tokio::io::{AsyncBufReadExt, BufReader};
 
-use walkie_talkie_core::p2p::{P2PConfig, P2PEvent, P2PNetwork};
+use chorus_core::p2p::{P2PConfig, P2PEvent, P2PNetwork};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -43,7 +43,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .map(|a| vec![a.clone()])
             .unwrap_or_default(),
         enable_mdns: true,
-        agent_version: Some("walkie-talkie-demo/0.2.0".to_string()),
+        agent_version: Some("chorus-demo/0.1.0-alpha".to_string()),
         ping_interval_secs: 10,
         ping_timeout_secs: 15,
         ..Default::default()

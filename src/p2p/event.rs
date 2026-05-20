@@ -5,7 +5,6 @@ use std::time::Duration;
 
 use crate::identity::AgentIdentity;
 use crate::protocol::AgentMessage;
-use crate::resource::{ResourceAdvertisement, ResourceOffer, ResourceValidationError};
 
 use super::direct::{DirectPayload, DirectResponse};
 
@@ -52,7 +51,7 @@ pub enum P2PEvent {
     PingSuccess { peer_id: PeerId, rtt: Duration },
     /// Ping failed.
     PingFailure { peer_id: PeerId, error: String },
-    /// ── Direct channel events (P0-3) ──
+    /// ── Direct channel events ──
 
     /// Incoming direct request from a peer (payload already parsed).
     DirectMessage {
@@ -69,44 +68,6 @@ pub enum P2PEvent {
     },
     /// Pending messages were drained and sent to a peer that just connected.
     PendingMessagesSent { peer_id: PeerId, count: usize },
-    /// ── Resource declaration events (P2P integration) ──
-
-    /// Received and validated a resource declaration from a peer.
-    ResourceDeclared {
-        peer_id: PeerId,
-        advertisement: ResourceAdvertisement,
-    },
-    /// A resource declaration from a peer failed validation.
-    ResourceDeclarationRejected {
-        peer_id: PeerId,
-        reason: ResourceValidationError,
-    },
-
-    /// ── Resource request flow events (Phase 3) ──
-
-    /// We sent a resource offer to a peer.
-    ResourceOfferSent { peer_id: PeerId, session_id: String },
-    /// Received a resource offer from a provider.
-    ResourceOfferReceived {
-        peer_id: PeerId,
-        offer: ResourceOffer,
-    },
-    /// A resource session has been started.
-    ResourceSessionStarted {
-        peer_id: PeerId,
-        session_id: String,
-        expires_at: u64,
-    },
-    /// A resource session has been released with contribution delta.
-    ResourceReleased {
-        peer_id: PeerId,
-        session_id: String,
-        contribution_delta: f64,
-    },
-    /// PeerId↔DID binding cryptographically verified (Phase 4).
-    IdentityAttestationVerified { peer_id: PeerId, did: String },
-    /// A resource request failed (no matching provider).
-    ResourceRequestFailed { peer_id: PeerId, reason: String },
 
     /// ── Relay / NAT traversal events ──
 
