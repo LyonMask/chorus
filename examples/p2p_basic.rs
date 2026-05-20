@@ -190,54 +190,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
             P2PEvent::PendingMessagesSent { peer_id, count } => {
                 println!("📤 Flush {} pending to {}", count, peer_id);
             }
-            P2PEvent::ResourceDeclared {
-                peer_id,
-                advertisement,
-            } => {
-                println!(
-                    "📦 Resource from {peer_id}: agent={}, cpu={:.1}%, mem={}MB",
-                    advertisement.agent_id,
-                    advertisement.cpu_offer * 100.0,
-                    advertisement.memory_offer_mb
-                );
-            }
-            P2PEvent::ResourceDeclarationRejected { peer_id, reason } => {
-                println!("❌ Resource rejected from {peer_id}: {reason}");
-            }
-            P2PEvent::ResourceOfferSent {
-                peer_id,
-                session_id,
-            } => {
-                println!("📦 Offer sent to {peer_id}: session={session_id}");
-            }
-            P2PEvent::ResourceOfferReceived { peer_id, offer } => {
-                println!(
-                    "📦 Offer from {peer_id}: cpu={:.1}, mem={}MB",
-                    offer.cpu_amount, offer.memory_amount_mb
-                );
-            }
-            P2PEvent::ResourceSessionStarted {
-                peer_id,
-                session_id,
-                expires_at,
-            } => {
-                println!("✅ Session started with {peer_id}: session={session_id}, expires_at={expires_at}");
-            }
-            P2PEvent::ResourceReleased {
-                peer_id,
-                session_id,
-                contribution_delta,
-            } => {
-                println!(
-                    "👋 Session released {peer_id}: session={session_id}, delta={contribution_delta:.4}"
-                );
-            }
-            P2PEvent::ResourceRequestFailed { peer_id, reason } => {
-                println!("❌ Resource request failed {peer_id}: {reason}");
-            }
-            P2PEvent::IdentityAttestationVerified { peer_id, did } => {
-                println!("🔐 Identity attestation verified {peer_id}: {did}");
-            }
             P2PEvent::RelayReservationAccepted { relay_peer_id } => {
                 println!("🔌 Relay reservation accepted: {relay_peer_id}");
             }

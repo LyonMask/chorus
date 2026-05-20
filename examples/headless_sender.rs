@@ -35,7 +35,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Wait for E2EE
     let target_peer = Arc::new(std::sync::Mutex::new(None::<libp2p::PeerId>));
-    let tp = target_peer.clone();
+    let _tp = target_peer.clone();
     let e2ee_ready = Arc::new(tokio::sync::Notify::new());
 
     let tp2 = target_peer.clone();
@@ -52,7 +52,7 @@ async fn main() -> anyhow::Result<()> {
                     eprintln!("🔐 E2EE with {}", peer_id);
                     e2ee2.notify_one();
                 }
-                P2PEvent::EncryptedMessage { from, plaintext } => {
+                P2PEvent::EncryptedMessage { from: _, plaintext } => {
                     let text = String::from_utf8_lossy(plaintext);
                     println!("RECEIVED|{}|{}", chrono_now(), text);
                 }

@@ -334,7 +334,7 @@ async fn handle_structured_message(
             );
             // Auto-reply: accept
             let reply = msg.make_reply(
-                &my_identity,
+                my_identity,
                 serde_json::json!({
                     "status": "accepted",
                     "eta_ms": 5000,
@@ -370,7 +370,7 @@ async fn handle_structured_message(
                 .map(|cap| my_identity.has_capability(cap))
                 .unwrap_or(true);
             let reply = msg.make_reply(
-                &my_identity,
+                my_identity,
                 serde_json::json!({
                     "can_do": can_do,
                     "eta_ms": if can_do { 3000 } else { 0 },

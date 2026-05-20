@@ -6,7 +6,6 @@
 //!   Listener:  cargo run --example cross_machine_test -- --role a --listen 0.0.0.0 --port 7001
 //!   Dialer:    cargo run --example cross_machine_test -- --role b --port 7002 --dial /ip4/<LISTENER_IP>/tcp/7001
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use chorus_core::identity::{did_from_pubkey, IdentityBuilder};
@@ -275,40 +274,28 @@ async fn main() {
         role.to_ascii_uppercase()
     );
     println!("╠══════════════════════════════════════════════════════════╣");
+    println!("║  📡 Listen:   {:<44}║", truncate(&actual_listen, 44));
     println!(
-        "║  📡 Listen:   {}",
-        format!("{:<44}║", truncate(&actual_listen, 44))
+        "║  🔗 Remote:   {:<44}║",
+        truncate(&remote_peer_id.to_string(), 44)
     );
     println!(
-        "║  🔗 Remote:   {}",
-        format!("{:<44}║", truncate(&remote_peer_id.to_string(), 44))
+        "║  🔐 E2EE:     {:<44}║",
+        if ok {
+            "✅ VERIFIED"
+        } else {
+            "❌ NOT VERIFIED"
+        }
     );
+    println!("║  💬 Sent:     {:<44}║", "4 messages");
+    println!("║  📨 Recv:     {} messages{:>35}║", received.len(), "");
     println!(
-        "║  🔐 E2EE:     {}",
-        format!(
-            "{:<44}║",
-            if ok {
-                "✅ VERIFIED"
-            } else {
-                "❌ NOT VERIFIED"
-            }
-        )
-    );
-    println!("║  💬 Sent:     {}", format!("{:<44}║", "4 messages"));
-    println!(
-        "║  📨 Recv:     {}",
-        format!("{} messages{:>35}║", received.len(), "")
-    );
-    println!(
-        "║  RESULT:     {}",
-        format!(
-            "{:<44}║",
-            if ok {
-                "✅ CROSS-MACHINE E2EE VERIFIED"
-            } else {
-                "⚠️ NO MESSAGES RECEIVED"
-            }
-        )
+        "║  RESULT:     {:<44}║",
+        if ok {
+            "✅ CROSS-MACHINE E2EE VERIFIED"
+        } else {
+            "⚠️ NO MESSAGES RECEIVED"
+        }
     );
     println!("╚══════════════════════════════════════════════════════════╝");
 
