@@ -15,9 +15,9 @@ use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::Mutex;
 
-use walkie_talkie_core::identity::{AgentIdentity, IdentityBuilder, IdentityEnvelope};
-use walkie_talkie_core::protocol::{AgentMessage, MessageProtocol};
-use walkie_talkie_core::p2p::{P2PEvent, P2PNetwork};
+use chorus_core::identity::{AgentIdentity, IdentityBuilder, IdentityEnvelope};
+use chorus_core::protocol::{AgentMessage, MessageProtocol};
+use chorus_core::p2p::{P2PEvent, P2PNetwork};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

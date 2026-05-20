@@ -21,9 +21,9 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::io::AsyncBufReadExt;
 
-use walkie_talkie_core::identity::{AgentIdentity, IdentityBuilder};
-use walkie_talkie_core::p2p::{P2PConfig, P2PEvent, P2PNetwork};
-use walkie_talkie_core::protocol::{AgentMessage, MessageProtocol};
+use chorus_core::identity::{AgentIdentity, IdentityBuilder};
+use chorus_core::p2p::{P2PConfig, P2PEvent, P2PNetwork};
+use chorus_core::protocol::{AgentMessage, MessageProtocol};
 
 // ─── Agent Role ─────────────────────────────────────────────────
 
@@ -58,7 +58,7 @@ impl Agent {
 async fn create_agent(name: &str, capabilities: &[&str], role: &str) -> Result<(Agent, tokio::sync::mpsc::UnboundedReceiver<P2PEvent>), Box<dyn Error>> {
     let (identity, _signing_key) = IdentityBuilder::new(name)
         .capabilities(capabilities)
-        .version("walkie-talkie-core/0.2.0")
+        .version("chorus-core/0.1.0-alpha")
         .build()?;
 
     let config = P2PConfig {
@@ -264,7 +264,7 @@ async fn run_demo() -> Result<(), Box<dyn Error>> {
         }),
     )
     .to(&rustacean.identity.agent_id)
-    .priority(walkie_talkie_core::protocol::Priority::HIGH);
+    .priority(chorus_core::protocol::Priority::HIGH);
 
     let tid = task_msg.id.clone();
     *task_id.lock().await = Some(tid.as_str().to_string());

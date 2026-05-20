@@ -31,9 +31,9 @@ use ratatui::{
     Frame, Terminal,
 };
 
-use walkie_talkie_core::identity::IdentityBuilder;
-use walkie_talkie_core::p2p::{P2PConfig, P2PEvent, P2PNetwork};
-use walkie_talkie_core::protocol::{AgentMessage, MessageProtocol};
+use chorus_core::identity::IdentityBuilder;
+use chorus_core::p2p::{P2PConfig, P2PEvent, P2PNetwork};
+use chorus_core::protocol::{AgentMessage, MessageProtocol};
 
 // ─── Data Types ─────────────────────────────────────────────────
 

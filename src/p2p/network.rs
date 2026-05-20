@@ -4,14 +4,13 @@
 //! spawns the swarm loop in a background tokio task and returns a handle
 //! (`P2PNetwork`) for sending commands and an event receiver.
 
-use libp2p::{dcutr, gossipsub, identify, mdns, ping, relay, request_response, Multiaddr, PeerId};
+use libp2p::{gossipsub, identify, mdns, ping, relay, request_response, Multiaddr, PeerId};
 use std::{collections::HashMap, time::Duration};
 use tokio::sync::{mpsc, oneshot};
 
 use futures::StreamExt;
 
 use crate::crypto::CryptoLayer;
-use crate::resource::{ContributionEngine, MaintenanceReport, ResourceOffer};
 
 use super::behaviour::WalkieBehaviour;
 use super::config::{P2PCommand, P2PConfig};
@@ -44,8 +43,6 @@ impl P2PNetwork {
             .map_err(|e| anyhow::anyhow!("keypair generation: {e}"))?;
 
         // ── Relay server configuration ──
-        // When relay_server is true, accept reservations from other peers.
-        // When false (default), set max_reservations to 0 to effectively disable.
         let relay_config = if config.relay_server {
             relay::Config::default()
         } else {
@@ -56,9 +53,6 @@ impl P2PNetwork {
         };
 
         // ── Transport: TCP + Noise + Yamux + Relay client ──
-        // Relay client enables connecting to peers behind NAT/firewalls
-        // via a relay node. DCUtR automatically upgrades relayed connections
-        // to direct connections when possible (hole punching).
         let mut swarm = libp2p::SwarmBuilder::with_new_identity()
             .with_tokio()
             .with_tcp(
@@ -84,9 +78,9 @@ impl P2PNetwork {
                 let agent_version = config
                     .agent_version
                     .clone()
-                    .unwrap_or_else(|| "walkie-talkie-core/0.3.0".into());
+                    .unwrap_or_else(|| "chorus-core/0.1.0-alpha".into());
                 let identify = identify::Behaviour::new(
-                    identify::Config::new("/walkie-talkie/id/1.0.0".into(), key.public())
+                    identify::Config::new("/chorus/id/1.0.0".into(), key.public())
                         .with_agent_version(agent_version),
                 );
 
@@ -149,7 +143,6 @@ impl P2PNetwork {
         }
 
         // Auto-dial relay peers for NAT traversal support.
-        // Relay peers provide a fallback path when direct connections fail.
         let relay_peers = config.relay_peers.clone();
         let relay_cmd_tx = cmd_tx.clone();
         if !relay_peers.is_empty() {
@@ -162,8 +155,6 @@ impl P2PNetwork {
                         reply: oneshot::channel().0,
                     });
                 }
-                // After connecting to relay, listen through it for incoming connections.
-                // This requests a reservation and makes us reachable via the relay.
                 tokio::time::sleep(Duration::from_secs(2)).await;
                 for relay_addr in &relay_peers {
                     let listen_addr = format!("{relay_addr}/p2p-circuit");
@@ -177,40 +168,19 @@ impl P2PNetwork {
         }
 
         let our_peer_id = peer_id;
-        let swarm_cmd_tx = cmd_tx.clone();
         let auto_kx = config.auto_key_exchange;
         let agent_identity = config.agent_identity.clone();
 
-        // Extract resource_ad and signing_key before moving config
-        let resource_ad = config.resource_ad;
-        let signing_key = config.signing_key.clone();
+        // Clone cmd_tx for the struct before moving into the event loop
+        let struct_cmd_tx = cmd_tx.clone();
 
         // ── Swarm event loop ──
         tokio::spawn(async move {
             let mut crypto = crypto;
             let pending_store = PendingMessageStore::new();
-            let resource_pending_store = PendingMessageStore::with_ttl(Duration::from_secs(
-                direct::RESOURCE_PENDING_TTL_SECS,
-            ));
             let mut mdns_peer_addrs: HashMap<PeerId, Vec<Multiaddr>> = HashMap::new();
             let mut identity_registry: Option<crate::identity::IdentityRegistry> =
                 Some(crate::identity::IdentityRegistry::new());
-            let mut nonce_store = crate::trust::peer_binding::NonceStore::new(1000);
-
-            // ContributionEngine: created from resource_ad if provided.
-            let mut resource_engine = match &resource_ad {
-                Some(ad) => {
-                    let mut engine = ContributionEngine::new(ad.agent_id.clone());
-                    engine.signing_key = signing_key.clone();
-                    engine.declare_resources(ad.clone());
-                    tracing::info!(target: "resource", "📦 ContributionEngine initialised for '{}'", ad.agent_id);
-                    Some(engine)
-                }
-                None => {
-                    tracing::debug!(target: "resource", "📦 no resource_ad configured, ContributionEngine not active");
-                    None
-                }
-            };
 
             loop {
                 tokio::select! {
@@ -227,7 +197,7 @@ impl P2PNetwork {
                                 );
                                 let _ = event_tx.send(P2PEvent::PeerConnected { peer_id });
 
-                                // P0-3: Drain pending messages
+                                // Drain pending messages
                                 if let Some(messages) = pending_store.drain(&peer_id) {
                                     let count = messages.len();
                                     tracing::info!(target: "p2p", "📤 draining {count} pending messages for {peer_id}");
@@ -237,19 +207,10 @@ impl P2PNetwork {
                                     let _ = event_tx.send(P2PEvent::PendingMessagesSent { peer_id, count });
                                 }
 
-                                // P1: Drain pending resource requests (5-min TTL)
-                                if let Some(messages) = resource_pending_store.drain(&peer_id) {
-                                    let count = messages.len();
-                                    tracing::info!(target: "resource", "📤 draining {count} pending resource requests for {peer_id}");
-                                    for msg in messages {
-                                        swarm.behaviour_mut().direct.send_request(&peer_id, msg);
-                                    }
-                                }
-
                                 // Auto key exchange via Direct channel
                                 if auto_kx {
                                     handler::send_key_offer(&mut swarm, &my_keys, &peer_id);
-                                    let cmd_tx_retry = swarm_cmd_tx.clone();
+                                    let cmd_tx_retry = cmd_tx.clone();
                                     let peer_retry = peer_id;
                                     tokio::spawn(async move {
                                         tokio::time::sleep(Duration::from_millis(800)).await;
@@ -344,7 +305,7 @@ impl P2PNetwork {
                                     }
                                 }
                             }
-                            // ── Gossipsub (broadcast + legacy) ──
+                            // ── Gossipsub ──
                             libp2p::swarm::SwarmEvent::Behaviour(
                                 super::WalkieBehaviourEvent::Gossipsub(
                                     gossipsub::Event::Message {
@@ -358,7 +319,7 @@ impl P2PNetwork {
                                 if let Ok(envelope) = serde_json::from_slice::<CryptoEnvelope>(&message.data) {
                                     handler::handle_crypto_envelope(
                                         from, envelope, &mut crypto, &my_keys,
-                                        &mut swarm, &event_tx, &agent_identity,
+                                        &mut swarm, &event_tx, &agent_identity, &mut identity_registry,
                                     );
                                 } else {
                                     let _ = event_tx.send(P2PEvent::RawMessage { from, data: message.data });
@@ -375,7 +336,7 @@ impl P2PNetwork {
                                 ),
                             ) => { tracing::debug!(target: "p2p", "{peer_id} unsubscribed {topic}"); }
 
-                            // ── Direct channel (P0-3 + resource declarations) ──
+                            // ── Direct channel ──
                             libp2p::swarm::SwarmEvent::Behaviour(
                                 super::WalkieBehaviourEvent::Direct(
                                     request_response::Event::Message {
@@ -387,18 +348,10 @@ impl P2PNetwork {
                             ) => {
                                 tracing::trace!(target: "p2p", "📨 direct request from {peer}: request_id={}", request.request_id);
 
-                                // We always need a ContributionEngine for the handler,
-                                // even if resource_ad was not configured (engine is a no-op).
-                                let engine_ref = resource_engine.get_or_insert_with(|| {
-                                    let mut e = ContributionEngine::new(String::new());
-                                    e.signing_key = signing_key.clone();
-                                    e
-                                });
-
                                 let response = handler::handle_direct_request(
                                     peer, request, &mut crypto, &my_keys,
                                     &mut swarm, &event_tx, &agent_identity,
-                                    engine_ref, &mut identity_registry, &signing_key, &mut nonce_store,
+                                    &mut identity_registry,
                                 );
                                 let _ = swarm.behaviour_mut().direct.send_response(channel, response);
                             }
@@ -509,13 +462,11 @@ impl P2PNetwork {
                                 let _ = reply.send(result);
                             }
 
-                            // Broadcast: stays on Gossipsub
                             Some(P2PCommand::Broadcast { data, reply }) => {
                                 let result = swarm.behaviour_mut().gossipsub.publish(wt_topic(), data);
                                 let _ = reply.send(result.map_err(|e| anyhow::anyhow!("{e}")));
                             }
 
-                            // P0-3: SendEncrypted → Direct channel
                             Some(P2PCommand::SendEncrypted { peer_id: target, plaintext, reply }) => {
                                 let result = (|| -> anyhow::Result<()> {
                                     let peer_str = target.to_string();
@@ -534,7 +485,6 @@ impl P2PNetwork {
                                 let _ = reply.send(result);
                             }
 
-                            // P0-3: InitKeyExchange → Direct channel
                             Some(P2PCommand::InitKeyExchange { peer_id: target, reply }) => {
                                 let request = direct::key_offer_request(my_keys.public.clone());
                                 let result = (|| -> anyhow::Result<()> {
@@ -550,7 +500,6 @@ impl P2PNetwork {
                                 let _ = reply.send(result);
                             }
 
-                            // P0-3: SendStructured → Direct channel
                             Some(P2PCommand::SendStructured { peer_id: target, message, reply }) => {
                                 let result = (|| -> anyhow::Result<()> {
                                     let plaintext = message.to_json_bytes()?;
@@ -570,7 +519,6 @@ impl P2PNetwork {
                                 let _ = reply.send(result);
                             }
 
-                            // BroadcastStructured: send encrypted via Direct channel to each connected peer
                             Some(P2PCommand::BroadcastStructured { message, reply }) => {
                                 let result = (|| -> anyhow::Result<()> {
                                     let plaintext = message.to_json_bytes()?;
@@ -597,7 +545,6 @@ impl P2PNetwork {
                                 let _ = reply.send(result);
                             }
 
-                            // P0-3: SendDirect (pre-built request)
                             Some(P2PCommand::SendDirect { peer_id: target, request, reply }) => {
                                 let result = (|| -> anyhow::Result<()> {
                                     if swarm.is_connected(&target) {
@@ -627,103 +574,6 @@ impl P2PNetwork {
                                 let _ = reply.send(addrs);
                             }
 
-                            // ── Resource commands (P2P integration) ──
-
-                            // Send our ResourceDeclaration to a specific peer via Direct channel.
-                            Some(P2PCommand::SendResourceDeclaration { peer_id: target, reply }) => {
-                                let result = (|| -> anyhow::Result<()> {
-                                    let engine = resource_engine.as_ref()
-                                        .ok_or_else(|| anyhow::anyhow!("no resource_ad configured"))?;
-                                    if let Some(ref ad) = engine.my_ad {
-                                        let request = direct::resource_declaration_request(ad.clone());
-                                        if swarm.is_connected(&target) {
-                                            swarm.behaviour_mut().direct.send_request(&target, request);
-                                        } else {
-                                            if !pending_store.store(target, request) {
-                                                return Err(anyhow::anyhow!("pending queue full for {target}"));
-                                            }
-                                        }
-                                    } else {
-                                        return Err(anyhow::anyhow!("no resource_ad set in engine"));
-                                    }
-                                    Ok(())
-                                })();
-                                let _ = reply.send(result);
-                            }
-
-                            // Update our ResourceAdvertisement and broadcast to all connected peers.
-                            Some(P2PCommand::UpdateResourceAd { ad, reply }) => {
-                                let result = (|| -> anyhow::Result<()> {
-                                    // Validate the ad before accepting it.
-                                    ad.validate()
-                                        .map_err(|e| anyhow::anyhow!("invalid resource ad: {e}"))?;
-
-                                    let engine = resource_engine.get_or_insert_with(|| {
-                                        let mut e = ContributionEngine::new(ad.agent_id.clone());
-                                        e.signing_key = signing_key.clone();
-                                        e
-                                    });
-                                    let declared = engine.declare_resources(ad.clone());
-
-                                    // Broadcast to all connected peers.
-                                    let peers: Vec<PeerId> = swarm.connected_peers().copied().collect();
-                                    let request = direct::resource_declaration_request(declared);
-                                    for peer in &peers {
-                                        if peer == &our_peer_id { continue; }
-                                        if swarm.is_connected(peer) {
-                                            swarm.behaviour_mut().direct.send_request(peer, request.clone());
-                                        }
-                                    }
-                                    tracing::info!(target: "resource", "📦 updated ResourceDeclaration, broadcast to {} peers", peers.len());
-                                    Ok(())
-                                })();
-                                let _ = reply.send(result);
-                            }
-
-                            // Get all known resource advertisements from the local table.
-                            Some(P2PCommand::ListResources { reply }) => {
-                                let ads = if let Some(ref engine) = resource_engine {
-                                    engine.table.entries()
-                                } else {
-                                    Vec::new()
-                                };
-                                let _ = reply.send(ads);
-                            }
-
-                            // Run maintenance tick on the ContributionEngine.
-                            Some(P2PCommand::ResourceTick { reply }) => {
-                                let report = if let Some(ref mut engine) = resource_engine {
-                                    engine.tick()
-                                } else {
-                                    MaintenanceReport {
-                                        ads_evicted: 0,
-                                        sessions_expired: 0,
-                                        offers_expired: 0,
-                                        total_provided: 0,
-                                        total_consumed: 0,
-                                        active_sessions: 0,
-                                        pending_sessions: 0,
-                                    }
-                                };
-                                let _ = reply.send(report);
-                            }
-
-                            Some(P2PCommand::RequestResource { peer_id: target, request, reply }) => {
-                                let result = (|| -> anyhow::Result<ResourceOffer> {
-                                    let req = direct::resource_request_request(request);
-                                    if swarm.is_connected(&target) {
-                                        swarm.behaviour_mut().direct.send_request(&target, req);
-                                        anyhow::bail!("request sent; wait for ResourceOfferReceived event")
-                                    } else {
-                                        if !resource_pending_store.store(target, req) {
-                                            anyhow::bail!("resource pending queue full for {target}")
-                                        }
-                                        anyhow::bail!("peer {target} not connected; queued for reconnect (TTL 5min)")
-                                    }
-                                })();
-                                let _ = reply.send(result);
-                            }
-
                             Some(P2PCommand::Shutdown) | None => {
                                 tracing::info!(target: "p2p", "swarm shutdown");
                                 break;
@@ -734,7 +584,7 @@ impl P2PNetwork {
             }
         });
 
-        Ok((Self { peer_id, cmd_tx }, event_rx))
+        Ok((Self { peer_id, cmd_tx: struct_cmd_tx }, event_rx))
     }
 
     /// Create with default config.
@@ -776,7 +626,6 @@ impl P2PNetwork {
     }
 
     /// Encrypt and send a plaintext message to a specific peer via Direct channel.
-    /// If peer is offline, message is stored for delivery on reconnect.
     pub async fn send_encrypted(&self, peer_id: PeerId, plaintext: Vec<u8>) -> anyhow::Result<()> {
         let (reply, rx) = oneshot::channel();
         self.cmd_tx.send(P2PCommand::SendEncrypted {
@@ -827,76 +676,7 @@ impl P2PNetwork {
         Ok(rx.await?)
     }
 
-    // ── Resource API (P2P integration) ──
-
-    /// Send our ResourceDeclaration to a specific peer via Direct channel.
-    ///
-    /// If peer is offline, the declaration is queued for delivery on reconnect.
-    /// Requires a `resource_ad` to be configured in `P2PConfig`.
-    pub async fn send_resource_declaration(&self, peer_id: PeerId) -> anyhow::Result<()> {
-        let (reply, rx) = oneshot::channel();
-        self.cmd_tx
-            .send(P2PCommand::SendResourceDeclaration { peer_id, reply })?;
-        rx.await?
-    }
-
-    /// Update our resource advertisement and broadcast to all connected peers.
-    ///
-    /// The advertisement is validated before acceptance. If valid, it is
-    /// stored in the ContributionEngine and sent to all connected peers via
-    /// Direct channel.
-    pub async fn update_resource_ad(
-        &self,
-        ad: crate::resource::ResourceAdvertisement,
-    ) -> anyhow::Result<()> {
-        let (reply, rx) = oneshot::channel();
-        self.cmd_tx
-            .send(P2PCommand::UpdateResourceAd { ad, reply })?;
-        rx.await?
-    }
-
-    /// Get all known resource advertisements from the local resource table.
-    ///
-    /// Returns ads received from other nodes via Direct channel. Empty if
-    /// no resource_ad was configured (ContributionEngine not active).
-    pub async fn list_resources(
-        &self,
-    ) -> anyhow::Result<Vec<crate::resource::ResourceAdvertisement>> {
-        let (reply, rx) = oneshot::channel();
-        self.cmd_tx.send(P2PCommand::ListResources { reply })?;
-        Ok(rx.await?)
-    }
-
-    /// Run a maintenance tick on the ContributionEngine.
-    ///
-    /// Evicts expired advertisements and timed-out sessions. Should be
-    /// called periodically (e.g., every 60 seconds).
-    pub async fn resource_tick(&self) -> anyhow::Result<MaintenanceReport> {
-        let (reply, rx) = oneshot::channel();
-        self.cmd_tx.send(P2PCommand::ResourceTick { reply })?;
-        Ok(rx.await?)
-    }
-
-    /// Request resources from a specific peer via Direct channel.
-    ///
-    /// Sends a ResourceRequest and waits for the provider's ResourceOffer.
-    /// Returns the offer on success, or an error if no provider is available.
-    pub async fn request_resource(
-        &self,
-        peer_id: PeerId,
-        request: crate::resource::ResourceRequest,
-    ) -> anyhow::Result<crate::resource::ResourceOffer> {
-        let (reply, rx) = oneshot::channel();
-        self.cmd_tx.send(P2PCommand::RequestResource {
-            peer_id,
-            request,
-            reply,
-        })?;
-        rx.await?
-    }
-
     /// Send a pre-built DirectRequest to a peer via Direct channel.
-    /// If peer is offline, message is queued for delivery on reconnect.
     pub async fn send_direct_request(
         &self,
         peer_id: PeerId,

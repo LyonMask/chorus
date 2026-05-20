@@ -5,7 +5,7 @@
 //! Run: cargo bench --bench crypto_bench
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use walkie_talkie_core::crypto::{CryptoLayer, KeyPair};
+use chorus_core::crypto::{CryptoLayer, KeyPair};
 
 fn make_keypair() -> KeyPair {
     let crypto = CryptoLayer::new();

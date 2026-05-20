@@ -3,7 +3,7 @@
 //! Usage: cargo run --example headless_sender -- <multiaddr> <message1> <message2> ...
 
 use std::sync::Arc;
-use walkie_talkie_core::p2p::{P2PConfig, P2PEvent, P2PNetwork};
+use chorus_core::p2p::{P2PConfig, P2PEvent, P2PNetwork};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

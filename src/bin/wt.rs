@@ -1,8 +1,7 @@
-//! 🦀 wt — Walkie Talkie CLI
+//! 🦀 chorus — Chorus P2P CLI
 //!
-//! cargo run --bin wt -- start [--port PORT] [--name NAME]
-//! REPL: help | connect | status | chat | advertise | request | offers
-//!      accept | reject | release | pay | attest | trust | peers | quit
+//! chorus start [--port PORT] [--name NAME] [--relay] [--json]
+//! REPL: help | connect | status | chat | peers | quit
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -11,17 +10,14 @@ use clap::{Parser, Subcommand};
 use ed25519_dalek::SigningKey;
 use rand::RngCore;
 use tokio::io::{AsyncBufReadExt, BufReader};
-use walkie_talkie_core::identity::IdentityBuilder;
-use walkie_talkie_core::p2p::{DirectPayload, DirectRequest, P2PConfig, P2PEvent, P2PNetwork};
-use walkie_talkie_core::resource::{
-    now_ms, ResourceAdvertisement, ResourceRequest, ResourceSpec, WorkReceipt,
-};
+use chorus_core::identity::IdentityBuilder;
+use chorus_core::p2p::{P2PConfig, P2PEvent, P2PNetwork};
 
 /// Global flag: when true, output JSON lines instead of human-readable text.
 static JSON_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Helper: output a JSON line if in JSON mode, otherwise output normal text.
-fn wt_output(json: Option<&str>, text: &str) {
+fn output(json: Option<&str>, text: &str) {
     if JSON_MODE.load(std::sync::atomic::Ordering::Relaxed) {
         if let Some(j) = json {
             println!("{}", j);
@@ -34,7 +30,7 @@ fn wt_output(json: Option<&str>, text: &str) {
 }
 
 #[derive(Parser)]
-#[command(name = "wt", version, about = "Walkie Talkie P2P CLI")]
+#[command(name = "chorus", version, about = "Chorus P2P CLI")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -63,12 +59,9 @@ struct State {
     net: Arc<P2PNetwork>,
     agent_id: String,
     display_name: String,
-    signing_key: Arc<SigningKey>,
     did_map: Arc<std::sync::Mutex<HashMap<String, libp2p::PeerId>>>,
     pid_map: Arc<std::sync::Mutex<HashMap<String, String>>>,
     listen_addr: Arc<std::sync::Mutex<String>>,
-    /// Pending offers: session_id → (peer_id, offer_json)
-    pending_offers: Arc<std::sync::Mutex<HashMap<String, (libp2p::PeerId, String)>>>,
 }
 
 impl State {
@@ -99,8 +92,8 @@ impl State {
 
 fn load_or_create_identity(
     name: &str,
-) -> anyhow::Result<(walkie_talkie_core::identity::AgentIdentity, Arc<SigningKey>)> {
-    let dir = dirs::home_dir().unwrap_or_default().join(".wt");
+) -> anyhow::Result<(chorus_core::identity::AgentIdentity, Arc<SigningKey>)> {
+    let dir = dirs::home_dir().unwrap_or_default().join(".chorus");
     std::fs::create_dir_all(&dir)?;
     let seed_path = dir.join("identity.seed");
     let sk = if seed_path.exists() {
@@ -115,7 +108,7 @@ fn load_or_create_identity(
         SigningKey::from_bytes(&seed)
     };
     let identity = IdentityBuilder::new(name)
-        .version("0.3.0")
+        .version("0.1.0-alpha")
         .build_with_key(&sk)?;
     Ok((identity, Arc::new(sk)))
 }
@@ -126,17 +119,28 @@ async fn pump_events(
     did_map: &Arc<std::sync::Mutex<HashMap<String, libp2p::PeerId>>>,
     pid_map: &Arc<std::sync::Mutex<HashMap<String, String>>>,
     listen_addr: &Arc<std::sync::Mutex<String>>,
-    pending_offers: &Arc<std::sync::Mutex<HashMap<String, (libp2p::PeerId, String)>>>,
 ) {
     while let Some(ev) = ev.recv().await {
         match ev {
             P2PEvent::Listening { address } => {
                 *listen_addr.lock().unwrap() = address.to_string();
-                wt_output(Some(&serde_json::json!({"type":"listening","address":address.to_string()}).to_string()), &format!("🔗 Listening: {}", address));
+                output(
+                    Some(&serde_json::json!({"type":"listening","address":address.to_string()}).to_string()),
+                    &format!("🔗 Listening: {}", address),
+                );
             }
-            P2PEvent::PeerConnected { ref peer_id } => wt_output(Some(&serde_json::json!({"type":"peer_connected","peer_id":peer_id.to_string()}).to_string()), &format!("🟢 Connected: {}", peer_id)),
-            P2PEvent::PeerDisconnected { ref peer_id } => wt_output(Some(&serde_json::json!({"type":"peer_disconnected","peer_id":peer_id.to_string()}).to_string()), &format!("🔴 Disconnected: {}", peer_id)),
-            P2PEvent::SessionEstablished { ref peer_id } => wt_output(Some(&serde_json::json!({"type":"session_established","peer_id":peer_id.to_string()}).to_string()), &format!("🔐 E2EE: {}", peer_id)),
+            P2PEvent::PeerConnected { ref peer_id } => output(
+                Some(&serde_json::json!({"type":"peer_connected","peer_id":peer_id.to_string()}).to_string()),
+                &format!("🟢 Connected: {}", peer_id),
+            ),
+            P2PEvent::PeerDisconnected { ref peer_id } => output(
+                Some(&serde_json::json!({"type":"peer_disconnected","peer_id":peer_id.to_string()}).to_string()),
+                &format!("🔴 Disconnected: {}", peer_id),
+            ),
+            P2PEvent::SessionEstablished { ref peer_id } => output(
+                Some(&serde_json::json!({"type":"session_established","peer_id":peer_id.to_string()}).to_string()),
+                &format!("🔐 E2EE: {}", peer_id),
+            ),
             P2PEvent::EncryptedMessage {
                 ref from,
                 ref plaintext,
@@ -161,61 +165,23 @@ async fn pump_events(
                     .insert(identity.agent_id.clone(), *peer_id);
                 println!("🪪 {} ({})", identity.display_name, identity.agent_id);
                 if JSON_MODE.load(std::sync::atomic::Ordering::Relaxed) {
-                    println!("{}", serde_json::json!({"type":"agent_identified","peer_id":peer_id.to_string(),"did":identity.agent_id.clone(),"display_name":identity.display_name.clone(),"capabilities":identity.capabilities.clone()}));
+                    println!("{}", serde_json::json!({
+                        "type":"agent_identified",
+                        "peer_id":peer_id.to_string(),
+                        "did":identity.agent_id.clone(),
+                        "display_name":identity.display_name.clone(),
+                        "capabilities":identity.capabilities.clone()
+                    }));
                 }
             }
-            P2PEvent::IdentityAttestationVerified {
-                ref peer_id,
-                ref did,
-            } => {
-                pid_map
-                    .lock()
-                    .unwrap()
-                    .insert(peer_id.to_string(), did.clone());
-                did_map.lock().unwrap().insert(did.clone(), *peer_id);
-                println!("✅ Attestation verified: {}", did);
-                if JSON_MODE.load(std::sync::atomic::Ordering::Relaxed) {
-                    println!("{}", serde_json::json!({"type":"attestation_verified","peer_id":peer_id.to_string(),"did":did.clone()}));
-                }
-            }
-            P2PEvent::ResourceOfferReceived {
-                ref peer_id,
-                ref offer,
-            } => {
-                let offer_json = serde_json::to_string(offer).unwrap_or_default();
-                println!(
-                    "📦 Offer from {}: cpu={}, mem={}MB",
-                    peer_id, offer.cpu_amount, offer.memory_amount_mb
-                );
-                // Store for later accept/reject
-                let sid = format!("{}_{}", offer.provider_id, now_ms());
-                pending_offers
-                    .lock()
-                    .unwrap()
-                    .insert(sid.clone(), (*peer_id, offer_json));
-                println!("   Use: accept {} / reject {}", sid, sid);
-            }
-            P2PEvent::ResourceSessionStarted {
-                ref peer_id,
-                ref session_id,
-                ..
-            } => println!("✅ Session started with {}: {}", peer_id, session_id),
-            P2PEvent::ResourceReleased {
-                ref peer_id,
-                ref session_id,
-                contribution_delta,
-            } => println!(
-                "📤 Released {} from {}: Δ={:.4} WC",
-                session_id, peer_id, contribution_delta
-            ),
             P2PEvent::DirectResponse {
                 ref from,
                 ref response,
             } => {
                 let st = match response.status {
-                    walkie_talkie_core::p2p::DirectResponseStatus::Ok => "OK".into(),
-                    walkie_talkie_core::p2p::DirectResponseStatus::Error(ref e) => e.clone(),
-                    walkie_talkie_core::p2p::DirectResponseStatus::Busy => "Busy".into(),
+                    chorus_core::p2p::DirectResponseStatus::Ok => "OK".into(),
+                    chorus_core::p2p::DirectResponseStatus::Error(ref e) => e.clone(),
+                    chorus_core::p2p::DirectResponseStatus::Busy => "Busy".into(),
                 };
                 println!("📨 [{}]: {}", from, st);
             }
@@ -237,6 +203,15 @@ async fn pump_events(
             P2PEvent::RelayConnectionUpgraded { ref peer_id } => {
                 println!("⚡ Direct connection upgraded: {}", peer_id);
             }
+            P2PEvent::StructuredMessage { from: _, ref message } => {
+                println!(
+                    "📋 [{}] {} → {}: {}",
+                    message.protocol.tag(),
+                    message.from_agent.display_name,
+                    if message.to_agent.is_empty() { "ALL".into() } else { message.to_agent.clone() },
+                    message.summary(),
+                );
+            }
             _ => {}
         }
     }
@@ -246,59 +221,42 @@ fn print_help() {
     println!("connect <multiaddr>       Connect to peer");
     println!("status                    Show node info + peers");
     println!("chat <did> <message>      Send encrypted message");
-    println!(
-        "advertise <cpu_cores> <cpu_frac> <mem_mb>  Publish resources (e.g. advertise 4 0.5 4096)"
-    );
-    println!("request <did> <cpu_frac> <mem_mb>          Request resources");
-    println!("offers                    List pending resource offers");
-    println!("accept <offer_id>         Accept a pending offer");
-    println!("reject <offer_id>         Reject a pending offer");
-    println!("release <provider_did>    Release resources (send WorkReceipt)");
-    println!("pay <provider_did>        Request payment");
-    println!("attest <did>              Send identity attestation");
-    println!("trust <did>               Query trust level");
     println!("peers                     List connected peers");
     println!("quit                      Exit");
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn repl(
     net: Arc<P2PNetwork>,
     mut ev: tokio::sync::mpsc::UnboundedReceiver<P2PEvent>,
     agent_id: String,
     display_name: String,
-    signing_key: Arc<SigningKey>,
     did_map: Arc<std::sync::Mutex<HashMap<String, libp2p::PeerId>>>,
     pid_map: Arc<std::sync::Mutex<HashMap<String, String>>>,
     listen_addr: Arc<std::sync::Mutex<String>>,
-    pending_offers: Arc<std::sync::Mutex<HashMap<String, (libp2p::PeerId, String)>>>,
 ) {
     let net2 = net.clone();
     let dm2 = did_map.clone();
     let pm2 = pid_map.clone();
     let la2 = listen_addr.clone();
-    let po2 = pending_offers.clone();
     tokio::spawn(async move {
-        pump_events(&net2, &mut ev, &dm2, &pm2, &la2, &po2).await;
+        pump_events(&net2, &mut ev, &dm2, &pm2, &la2).await;
     });
 
-    println!("\n🦀 wt REPL — DID: {}", agent_id);
+    println!("\n🦀 chorus REPL — DID: {}", agent_id);
     println!("   Type 'help' for commands\n");
 
     let s = State {
         net,
         agent_id,
         display_name,
-        signing_key,
         did_map,
         pid_map,
         listen_addr,
-        pending_offers,
     };
     let reader = BufReader::new(tokio::io::stdin());
     let mut lines = reader.lines();
     loop {
-        print!("wt> ");
+        print!("chorus> ");
         std::io::Write::flush(&mut std::io::stdout()).ok();
         let line = match lines.next_line().await {
             Ok(Some(l)) => l,
@@ -339,7 +297,6 @@ async fn repl(
                 println!();
             }
             "chat" => {
-                // chat <did> <message>
                 if parts.len() < 3 {
                     eprintln!("Usage: chat <did> <message>");
                     continue;
@@ -356,243 +313,6 @@ async fn repl(
                     }
                     Err(e) => eprintln!("❌ {}", e),
                 }
-            }
-            "advertise" => {
-                // advertise <cpu_cores> <cpu_frac> <mem_mb>
-                // Default: advertise 4 0.5 4096
-                let mut cpu_cores: u16 = 4;
-                let mut cpu_frac: f32 = 0.5;
-                let mut mem: u64 = 4096;
-                let rest = if parts.len() > 1 {
-                    parts[1..].join(" ")
-                } else {
-                    String::new()
-                };
-                let args: Vec<&str> = rest.split_whitespace().collect();
-                if !args.is_empty() {
-                    cpu_cores = args[0].parse().unwrap_or(4);
-                }
-                if args.len() >= 2 {
-                    cpu_frac = args[1].parse().unwrap_or(0.5);
-                }
-                if args.len() >= 3 {
-                    mem = args[2].parse().unwrap_or(4096);
-                }
-                let mut ad = ResourceAdvertisement {
-                    agent_id: s.agent_id.clone(),
-                    sequence: 1,
-                    timestamp: now_ms(),
-                    spec: ResourceSpec {
-                        cpu_cores,
-                        total_memory_mb: mem,
-                        max_bandwidth_up_mbps: 10,
-                        total_storage_bytes: 0,
-                    },
-                    cpu_offer: cpu_frac,
-                    memory_offer_mb: mem,
-                    bandwidth_offer: 10,
-                    storage_offer: 0,
-                    features: vec![],
-                    signing_pubkey: vec![],
-                    signature: vec![],
-                };
-                walkie_talkie_core::identity::sign_advertisement(&mut ad, &s.signing_key);
-                if let Err(e) = s.net.update_resource_ad(ad).await {
-                    eprintln!("❌ {}", e);
-                }
-            }
-            "request" => {
-                // request <did> [cpu_frac] [mem_mb]
-                if parts.len() < 2 {
-                    eprintln!("Usage: request <did> [cpu_frac] [mem_mb]");
-                    continue;
-                }
-                let did = parts[1];
-                let mut cpu: f32 = 0.5;
-                let mut mem: u64 = 256;
-                let rest = if parts.len() > 2 { parts[2] } else { "" };
-                let args: Vec<&str> = rest.split_whitespace().collect();
-                if !args.is_empty() {
-                    cpu = args[0].parse().unwrap_or(0.5);
-                }
-                if args.len() >= 2 {
-                    mem = args[1].parse().unwrap_or(256);
-                }
-                match s.peer_id(did) {
-                    Ok(pid) => {
-                        let mut req = ResourceRequest::new(s.agent_id.clone());
-                        req.min_cpu = cpu;
-                        req.min_memory_mb = mem;
-                        req.duration_ms = 300_000;
-                        match s.net.request_resource(pid, req).await {
-                            Ok(_) => {
-                                println!("✅ Request sent to {} (cpu={}, mem={}MB)", did, cpu, mem)
-                            }
-                            Err(e) => eprintln!("❌ {}", e),
-                        }
-                    }
-                    Err(e) => eprintln!("❌ {}", e),
-                }
-            }
-            "offers" => {
-                let offers = s.pending_offers.lock().unwrap();
-                if offers.is_empty() {
-                    println!("📭 No pending offers");
-                } else {
-                    println!("📦 Pending offers:");
-                    for (sid, (pid, _json)) in offers.iter() {
-                        println!("   {} from {}", sid, s.label(pid));
-                    }
-                }
-            }
-            "accept" => {
-                if parts.len() < 2 {
-                    eprintln!("Usage: accept <offer_id>");
-                    continue;
-                }
-                let sid = parts[1];
-                let (pid, _json) = {
-                    let offers = s.pending_offers.lock().unwrap();
-                    match offers.get(sid) {
-                        Some(v) => v.clone(),
-                        None => {
-                            eprintln!("❌ Offer '{}' not found", sid);
-                            continue;
-                        }
-                    }
-                };
-                let req = walkie_talkie_core::p2p::direct::resource_accept_request(sid.to_string());
-                if let Err(e) = s.net.send_direct_request(pid, req).await {
-                    eprintln!("❌ {}", e);
-                } else {
-                    s.pending_offers.lock().unwrap().remove(sid);
-                    println!("✅ Accepted offer {}", sid);
-                }
-            }
-            "reject" => {
-                if parts.len() < 2 {
-                    eprintln!("Usage: reject <offer_id>");
-                    continue;
-                }
-                let sid = parts[1];
-                let (pid, _) = {
-                    let offers = s.pending_offers.lock().unwrap();
-                    match offers.get(sid) {
-                        Some(v) => v.clone(),
-                        None => {
-                            eprintln!("❌ Offer '{}' not found", sid);
-                            continue;
-                        }
-                    }
-                };
-                let req = walkie_talkie_core::p2p::direct::resource_reject_request(
-                    sid.to_string(),
-                    walkie_talkie_core::resource::RejectReason::Cancelled,
-                );
-                if let Err(e) = s.net.send_direct_request(pid, req).await {
-                    eprintln!("❌ {}", e);
-                } else {
-                    s.pending_offers.lock().unwrap().remove(sid);
-                    println!("❌ Rejected offer {}", sid);
-                }
-            }
-            "release" => {
-                if parts.len() < 2 {
-                    eprintln!("Usage: release <provider_did>");
-                    continue;
-                }
-                match s.peer_id(parts[1]) {
-                    Ok(pid) => {
-                        let receipt = WorkReceipt {
-                            consumer: s.agent_id.clone(),
-                            provider: parts[1].to_string(),
-                            session_id: format!("manual-{}", now_ms()),
-                            cpu_used_ms: 1000,
-                            memory_peak_bytes: 256 * 1024 * 1024,
-                            duration_ms: 1000,
-                            window_start: now_ms() - 1000,
-                            window_end: now_ms(),
-                            provider_signature: vec![],
-                            consumer_signature: vec![],
-                        };
-                        let req =
-                            walkie_talkie_core::p2p::direct::resource_release_request(receipt);
-                        if let Err(e) = s.net.send_direct_request(pid, req).await {
-                            eprintln!("❌ {}", e);
-                        } else {
-                            println!("📤 Release sent to {}", parts[1]);
-                        }
-                    }
-                    Err(e) => eprintln!("❌ {}", e),
-                }
-            }
-            "pay" => {
-                if parts.len() < 2 {
-                    eprintln!("Usage: pay <provider_did>");
-                    continue;
-                }
-                match s.peer_id(parts[1]) {
-                    Ok(pid) => {
-                        let usage = walkie_talkie_core::economy::payment::UsageDetails::new();
-                        let pay_req = walkie_talkie_core::economy::payment::PaymentRequest::new(
-                            &format!("pay-{}", now_ms()),
-                            10.0,
-                            usage,
-                            parts[1],
-                        );
-                        let req = DirectRequest {
-                            request_id: 0,
-                            payload: DirectPayload::PaymentRequest {
-                                payment_request_json: serde_json::to_vec(&pay_req)
-                                    .unwrap_or_default(),
-                            },
-                        };
-                        if let Err(e) = s.net.send_direct_request(pid, req).await {
-                            eprintln!("❌ {}", e);
-                        } else {
-                            println!("💰 Payment request sent to {}", parts[1]);
-                        }
-                    }
-                    Err(e) => eprintln!("❌ {}", e),
-                }
-            }
-            "attest" => {
-                if parts.len() < 2 {
-                    eprintln!("Usage: attest <did>");
-                    continue;
-                }
-                match s.peer_id(parts[1]) {
-                    Ok(pid) => {
-                        let att =
-                            walkie_talkie_core::trust::peer_binding::IdentityAttestation::sign(
-                                &s.agent_id,
-                                &pid.to_string(),
-                                &s.signing_key,
-                            );
-                        let req = DirectRequest {
-                            request_id: 0,
-                            payload: DirectPayload::IdentityAttestation {
-                                attestation_json: serde_json::to_vec(&att).unwrap_or_default(),
-                            },
-                        };
-                        if let Err(e) = s.net.send_direct_request(pid, req).await {
-                            eprintln!("❌ {}", e);
-                        } else {
-                            println!("🔑 Attestation sent to {}", parts[1]);
-                        }
-                    }
-                    Err(e) => eprintln!("❌ {}", e),
-                }
-            }
-            "trust" => {
-                if parts.len() < 2 {
-                    eprintln!("Usage: trust <did>");
-                    continue;
-                }
-                println!(
-                    "Trust query for {}: (local trust state — full scoring requires integration)",
-                    parts[1]
-                );
             }
             "peers" => match s.net.list_peers().await {
                 Ok(peers) => {
@@ -624,11 +344,15 @@ async fn main() -> anyhow::Result<()> {
             let display = name.unwrap_or_else(|| {
                 hostname::get()
                     .map(|h| h.to_string_lossy().to_string())
-                    .unwrap_or_else(|_| "wt-node".into())
+                    .unwrap_or_else(|_| "chorus-node".into())
             });
-            let (identity, signing_key) = load_or_create_identity(&display)?;
+            let (identity, _signing_key) = load_or_create_identity(&display)?;
             if JSON_MODE.load(std::sync::atomic::Ordering::Relaxed) {
-                println!("{}", serde_json::json!({"type":"identity_ready","did":identity.agent_id,"display_name":display.clone()}));
+                println!("{}", serde_json::json!({
+                    "type":"identity_ready",
+                    "did":identity.agent_id,
+                    "display_name":display.clone()
+                }));
             }
             println!("🪪 {}", identity.agent_id);
             println!("👤 {}", display);
@@ -637,7 +361,6 @@ async fn main() -> anyhow::Result<()> {
                 listen_on: vec![format!("/ip4/0.0.0.0/tcp/{}", port)],
                 agent_identity: Some(identity.clone()),
                 auto_key_exchange: true,
-                signing_key: Some(signing_key.clone()),
                 relay_server: relay,
                 relay_peers,
                 ..Default::default()
@@ -645,10 +368,9 @@ async fn main() -> anyhow::Result<()> {
 
             let (net, ev) = P2PNetwork::new(cfg)?;
             if no_repl {
-                // Daemon mode: keep event loop alive without REPL
                 println!("🌍 Daemon mode — press Ctrl+C to stop");
                 println!("🔑 PeerId: {}", net.local_peer_id());
-                let net2 = Arc::new(net);
+                let _net2 = Arc::new(net);
                 let mut ev2 = ev;
                 tokio::spawn(async move {
                     while let Some(e) = ev2.recv().await {
@@ -670,20 +392,19 @@ async fn main() -> anyhow::Result<()> {
                     }
                     eprintln!("Event channel closed, shutting down.");
                 });
-                
+
                 tokio::signal::ctrl_c().await.ok();
             } else {
-            repl(
-                Arc::new(net),
-                ev,                identity.agent_id.clone(),
-                display,
-                signing_key,
-                Arc::new(std::sync::Mutex::new(HashMap::new())),
-                Arc::new(std::sync::Mutex::new(HashMap::new())),
-                Arc::new(std::sync::Mutex::new(String::new())),
-                Arc::new(std::sync::Mutex::new(HashMap::new())),
-            )
-            .await;
+                repl(
+                    Arc::new(net),
+                    ev,
+                    identity.agent_id.clone(),
+                    display,
+                    Arc::new(std::sync::Mutex::new(HashMap::new())),
+                    Arc::new(std::sync::Mutex::new(HashMap::new())),
+                    Arc::new(std::sync::Mutex::new(String::new())),
+                )
+                .await;
             }
         }
     }
