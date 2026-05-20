@@ -2,12 +2,12 @@
 //! 🤖 agent_chat.rs — Layer 0-2 Integration POC
 //!
 //! 3 AI Agents collaborate to complete a code review task:
-//!   Agent Steve (Coordinator) → assigns task to Agent Rustacean
+//!   Agent Alice (Coordinator) → assigns task to Agent Rustacean
 //!   Agent Rustacean (Worker)   → does the work, returns result
 //!   Agent Bridge (Reviewer)    → reviews the result, reports to human
 //!
 //! Usage:
-//!   Terminal 1: cargo run --example agent_chat -- Steve
+//!   Terminal 1: cargo run --example agent_chat -- Alice
 //!   Terminal 2: cargo run --example agent_chat -- Rustacean <addr1>
 //!   Terminal 3: cargo run --example agent_chat -- Bridge <addr1> <addr2>
 //!
@@ -153,7 +153,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             println!("  cargo run --example agent_chat -- <name> <addr> # Connect to peer");
             println!();
             println!("Demo roles:");
-            println!("  Steve (Coordinator) — assigns tasks, orchestrates");
+            println!("  Alice (Coordinator) — assigns tasks, orchestrates");
             println!("  Rustacean (Worker)   — does code review work");
             println!("  Bridge (Reviewer)    — reviews results, reports to human");
             Ok(())
@@ -178,50 +178,50 @@ async fn run_demo() -> Result<(), Box<dyn Error>> {
     // Create 3 agents
     println!("[SETUP] Creating 3 agents...");
 
-    let (steve, mut steve_rx) = create_agent("Steve", &["coordinate", "strategy"], "Coordinator").await?;
+    let (alice, mut alice_rx) = create_agent("Alice", &["coordinate", "strategy"], "Coordinator").await?;
     let (rustacean, _rustacean_rx) = create_agent("Rustacean", &["code-review", "crypto", "p2p"], "Worker").await?;
     let (bridge, _bridge_rx) = create_agent("Bridge", &["product", "review", "human-handoff"], "Reviewer").await?;
 
     println!();
-    println!("  🍎 Steve (Coordinator)     did:{}", steve.short_id());
+    println!("  Alice (Coordinator)     did:{}", alice.short_id());
     println!("  🦀 Rustacean (Worker)      did:{}", rustacean.short_id());
     println!("  🌉 Bridge (Reviewer)       did:{}", bridge.short_id());
     println!();
 
     // Start listening
     println!("[SETUP] Starting P2P networks...");
-    steve.network.listen("/ip4/127.0.0.1/tcp/0").await?;
+    alice.network.listen("/ip4/127.0.0.1/tcp/0").await?;
     rustacean.network.listen("/ip4/127.0.0.1/tcp/0").await?;
     bridge.network.listen("/ip4/127.0.0.1/tcp/0").await?;
 
     // Wait for Listening events to get actual addresses
-    let mut steve_listen_addr = None;
+    let mut alice_listen_addr = None;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
     while tokio::time::Instant::now() < deadline {
-        if let Ok(P2PEvent::Listening { address }) = steve_rx.try_recv() {
+        if let Ok(P2PEvent::Listening { address }) = alice_rx.try_recv() {
             let addr_str = address.to_string();
             if addr_str.contains("127.0.0.1") || addr_str.contains("0.0.0.0") {
                 let local_addr = addr_str.replace("0.0.0.0", "127.0.0.1");
-                steve_listen_addr = Some(local_addr);
+                alice_listen_addr = Some(local_addr);
                 break;
             }
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
-    let steve_addr = steve_listen_addr.unwrap_or_else(|| {
+    let alice_addr = alice_listen_addr.unwrap_or_else(|| {
         // Fallback: construct from local_peer_id
-        format!("/ip4/127.0.0.1/tcp/0/p2p/{}", steve.network.local_peer_id())
+        format!("/ip4/127.0.0.1/tcp/0/p2p/{}", alice.network.local_peer_id())
     });
-    println!("  Steve listening on: {}", steve_addr);
+    println!("  Alice listening on: {}", alice_addr);
     println!();
 
-    // Connect all agents to Steve (hub topology)
+    // Connect all agents to (hub topology)
     println!("[SETUP] Connecting agents (star topology)...");
 
-    // Connect Rustacean and Bridge to Steve
-    rustacean.network.dial(&steve_addr).await?;
-    bridge.network.dial(&steve_addr).await?;
+    // Connect Rustacean and Bridge to Alice
+    rustacean.network.dial(&alice_addr).await?;
+    bridge.network.dial(&alice_addr).await?;
 
     // Wait for connections
     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -229,7 +229,7 @@ async fn run_demo() -> Result<(), Box<dyn Error>> {
     println!();
 
     // ═══════════════════════════════════════════════════════════
-    // SCENARIO: Steve orchestrates a code review via Rustacean,
+    // SCENARIO: Alice orchestrates a code review via Rustacean,
     //           Bridge reviews the result and reports to human.
     // ═══════════════════════════════════════════════════════════
 
@@ -245,17 +245,17 @@ async fn run_demo() -> Result<(), Box<dyn Error>> {
     let _task_id1 = task_id.clone();
     let _result_received1 = result_received.clone();
 
-    // --- Steve sends heartbeat ---
+    // --- Alice sends heartbeat ---
     println!();
-    println!("[STEP 1] 🍎 Steve broadcasts heartbeat");
-    let hb = AgentMessage::heartbeat(&steve.identity, "online", 0.0);
-    steve.broadcast_msg(&hb).await?;
+    println!("[STEP 1] Alice broadcasts heartbeat");
+    let hb = AgentMessage::heartbeat(&alice.identity, "online", 0.0);
+    alice.broadcast_msg(&hb).await?;
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    // --- Steve assigns task to Rustacean ---
-    println!("[STEP 2] 🍎 Steve assigns code-review task to Rustacean");
+    // --- Alice assigns task to Rustacean ---
+    println!("[STEP 2] Alice assigns code-review task to Rustacean");
     let task_msg = AgentMessage::task(
-        &steve.identity,
+        &alice.identity,
         "code-review",
         serde_json::json!({
             "target": "src/crypto/mod.rs",
@@ -268,7 +268,7 @@ async fn run_demo() -> Result<(), Box<dyn Error>> {
 
     let tid = task_msg.id.clone();
     *task_id.lock().await = Some(tid.as_str().to_string());
-    steve.broadcast_msg(&task_msg).await?;
+    alice.broadcast_msg(&task_msg).await?;
     all_msgs1.lock().await.push(task_msg.summary());
     tokio::time::sleep(Duration::from_millis(300)).await;
 
@@ -280,7 +280,7 @@ async fn run_demo() -> Result<(), Box<dyn Error>> {
         0,
         "Received task, starting analysis of crypto module",
     )
-    .to(&steve.identity.agent_id)
+    .to(&alice.identity.agent_id)
     .reply_to(&tid);
     rustacean.broadcast_msg(&status1).await?;
     all_msgs1.lock().await.push(status1.summary());
@@ -294,7 +294,7 @@ async fn run_demo() -> Result<(), Box<dyn Error>> {
         50,
         "Checking encryption layer... nonce reuse concern found",
     )
-    .to(&steve.identity.agent_id)
+    .to(&alice.identity.agent_id)
     .reply_to(&tid);
     rustacean.broadcast_msg(&status2).await?;
     all_msgs1.lock().await.push(status2.summary());
@@ -323,7 +323,7 @@ async fn run_demo() -> Result<(), Box<dyn Error>> {
             "summary": "2 findings: 1 info, 1 warning. Code is production-ready with minor improvements."
         }),
     )
-    .to(&steve.identity.agent_id)
+    .to(&alice.identity.agent_id)
     .reply_to(&tid);
     rustacean.broadcast_msg(&result).await?;
     all_msgs1.lock().await.push(result.summary());
@@ -336,16 +336,16 @@ async fn run_demo() -> Result<(), Box<dyn Error>> {
         100,
         "Code review complete",
     )
-    .to(&steve.identity.agent_id)
+    .to(&alice.identity.agent_id)
     .reply_to(&tid);
     rustacean.broadcast_msg(&status_done).await?;
     all_msgs1.lock().await.push(status_done.summary());
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    // --- Steve forwards result to Bridge for review ---
-    println!("[STEP 6] 🍎 Steve forwards result to Bridge for human review");
+    // --- Alice forwards result to Bridge for review ---
+    println!("[STEP 6] Alice forwards result to Bridge for human review");
     let review_task = AgentMessage::task(
-        &steve.identity,
+        &alice.identity,
         "human-review",
         serde_json::json!({
             "original_task": "code-review",
@@ -356,7 +356,7 @@ async fn run_demo() -> Result<(), Box<dyn Error>> {
     )
     .to(&bridge.identity.agent_id)
     .reply_to(&tid);
-    steve.broadcast_msg(&review_task).await?;
+    alice.broadcast_msg(&review_task).await?;
     all_msgs1.lock().await.push(review_task.summary());
     tokio::time::sleep(Duration::from_millis(300)).await;
 
@@ -411,7 +411,7 @@ async fn run_demo() -> Result<(), Box<dyn Error>> {
     println!();
 
     // Cleanup
-    steve.network.shutdown()?;
+    alice.network.shutdown()?;
     rustacean.network.shutdown()?;
     bridge.network.shutdown()?;
 
@@ -429,7 +429,7 @@ async fn run_interactive(name: &str, peers: &[String]) -> Result<(), Box<dyn Err
         .init();
 
     let role = match name {
-        "Steve" => ("Coordinator", vec!["coordinate", "strategy"]),
+        "Alice" => ("Coordinator", vec!["coordinate", "strategy"]),
         "Rustacean" => ("Worker", vec!["code-review", "crypto", "p2p"]),
         "Bridge" => ("Reviewer", vec!["product", "review", "human-handoff"]),
         _ => ("Custom", vec!["general"]),

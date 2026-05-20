@@ -516,8 +516,8 @@ impl TuiApp {
     // ── Demo Data ──
 
     pub fn load_demo_data(&mut self) {
-        self.add_agent("steve", "Steve", "did:walkie:maMVNJDswURGw");
-        if let Some(a) = self.agents.get_mut("steve") {
+        self.add_agent("alice", "Alice", "did:walkie:maMVNJDswURGw");
+        if let Some(a) = self.agents.get_mut("alice") {
             a.capabilities = vec!["coordinate".into(), "strategy".into()];
         }
         self.add_agent("rustacean", "Rustacean", "did:walkie:fLYf2Xc0I3qyO");
@@ -531,8 +531,8 @@ impl TuiApp {
 
         // Simulate task flow
         self.push_activity(ActivityItem::new(
-            "Steve", ActivityAction::TaskAssigned,
-            "Steve assigned \"code-review\" to Rustacean",
+            "Alice", ActivityAction::TaskAssigned,
+            "Alice assigned \"code-review\" to Rustacean",
         ));
         self.tasks_assigned += 1;
 
@@ -555,8 +555,8 @@ impl TuiApp {
         );
 
         self.push_activity(ActivityItem::new(
-            "Steve", ActivityAction::TaskAssigned,
-            "Steve assigned \"human-review\" to Bridge",
+            "Alice", ActivityAction::TaskAssigned,
+            "Alice assigned \"human-review\" to Bridge",
         ));
         self.tasks_assigned += 1;
     }

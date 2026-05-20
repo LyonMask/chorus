@@ -29,7 +29,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     // ── Create agent identity ──────────────────────────────────
-    let (my_identity, _signing_key) = IdentityBuilder::new("Steve")
+    let (my_identity, _signing_key) = IdentityBuilder::new("Alice")
         .capabilities(&["code-review", "architecture"])
         .build()?;
 

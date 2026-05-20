@@ -510,7 +510,7 @@ impl App {
         // Simulate 3 agents connecting
         if self.demo_tick == 1 {
             self.demo_mode = true;
-            self.add_agent("steve", "Steve", "did:walkie:maMVNJDswURGw",
+            self.add_agent("alice", "Alice", "did:walkie:maMVNJDswURGw",
                 vec!["coordinate".into(), "strategy".into()]);
             self.add_agent("rustacean", "Rustacean", "did:walkie:fLYf2Xc0I3qyO",
                 vec!["code-review".into(), "crypto".into(), "p2p".into()]);
@@ -524,12 +524,12 @@ impl App {
             });
         }
 
-        // Steve assigns task at tick 2
+        // Alice assigns task at tick 2
         if self.demo_tick == 2 {
             self.add_activity(ActivityItem {
-                timestamp: now_str(), actor: "Steve".into(),
+                timestamp: now_str(), actor: "Alice".into(),
                 action: "TASK_ASSIGNED".into(),
-                detail: "Steve assigned \"code-review\" to Rustacean".into(),
+                detail: "Alice assigned \"code-review\" to Rustacean".into(),
                 is_urgent: false, requires_human: false, raw_json: String::new(),
             });
             self.tasks_assigned += 1;
@@ -569,13 +569,13 @@ impl App {
             );
         }
 
-        // Steve forwards at tick 6
+        // Alice forwards at tick 6
         if self.demo_tick == 6 {
             self.tasks_assigned += 1;
             self.add_activity(ActivityItem {
-                timestamp: now_str(), actor: "Steve".into(),
+                timestamp: now_str(), actor: "Alice".into(),
                 action: "TASK_ASSIGNED".into(),
-                detail: "Steve assigned \"human-review\" to Bridge".into(),
+                detail: "Alice assigned \"human-review\" to Bridge".into(),
                 is_urgent: false, requires_human: false, raw_json: String::new(),
             });
         }
