@@ -258,9 +258,27 @@ async fn test_broadcast_via_gossipsub() {
     net_a.dial(&addr_b).await.expect("dial");
     wait_for_session(&mut ev_a, &mut ev_b, Duration::from_secs(8)).await;
 
-    // Broadcast raw bytes
+    // Give gossipsub mesh time to form with only 2 peers
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    // Broadcast with retry — gossipsub may report InsufficientPeers
+    // when the mesh hasn't fully formed yet with only 2 nodes
     let data = b"broadcast test".to_vec();
-    net_a.broadcast(data.clone()).await.expect("broadcast");
+    let mut broadcast_ok = false;
+    for attempt in 0..5 {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        match net_a.broadcast(data.clone()).await {
+            Ok(_) => {
+                broadcast_ok = true;
+                break;
+            }
+            Err(e) if e.to_string().contains("InsufficientPeers") && attempt < 4 => {
+                continue;
+            }
+            Err(e) => panic!("broadcast failed: {e}"),
+        }
+    }
+    assert!(broadcast_ok, "broadcast never succeeded after retries");
 
     // B should receive as RawMessage (not encrypted)
     let event = wait_for_event(
