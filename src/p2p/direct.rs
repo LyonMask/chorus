@@ -5,12 +5,12 @@
 
 use futures::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use libp2p::request_response::{self, Codec, ProtocolSupport};
+use libp2p::PeerId;
 use std::{
     collections::HashMap,
     sync::atomic::{AtomicU64, Ordering},
     time::{Duration, Instant},
 };
-use libp2p::PeerId;
 
 // ── Protocol constants ─────────────────────────────────────────
 
@@ -152,9 +152,8 @@ async fn read_length_delimited_json<T: serde::de::DeserializeOwned, R: AsyncRead
     let mut buf = vec![0u8; len];
     reader.read_exact(&mut buf).await?;
 
-    serde_json::from_slice(&buf).map_err(|e| {
-        std::io::Error::new(std::io::ErrorKind::InvalidData, format!("json: {e}"))
-    })
+    serde_json::from_slice(&buf)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, format!("json: {e}")))
 }
 
 /// Write a length-delimited JSON frame: 4-byte big-endian length + body.
@@ -162,9 +161,8 @@ async fn write_length_delimited_json<T: serde::Serialize, W: AsyncWrite + Unpin 
     writer: &mut W,
     value: &T,
 ) -> std::io::Result<()> {
-    let bytes = serde_json::to_vec(value).map_err(|e| {
-        std::io::Error::new(std::io::ErrorKind::InvalidData, format!("json: {e}"))
-    })?;
+    let bytes = serde_json::to_vec(value)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, format!("json: {e}")))?;
 
     let len = bytes.len() as u32;
     writer.write_all(&len.to_be_bytes()).await?;
@@ -178,10 +176,7 @@ async fn write_length_delimited_json<T: serde::Serialize, W: AsyncWrite + Unpin 
 
 /// Create a configured request-response behaviour for the direct channel.
 pub fn new_direct_behaviour() -> request_response::Behaviour<DirectCodec> {
-    let protocols = std::iter::once((
-        WT_DIRECT_PROTOCOL.to_string(),
-        ProtocolSupport::Full,
-    ));
+    let protocols = std::iter::once((WT_DIRECT_PROTOCOL.to_string(), ProtocolSupport::Full));
     let config = request_response::Config::default()
         .with_request_timeout(Duration::from_secs(DIRECT_REQUEST_TIMEOUT_SECS))
         .with_max_concurrent_streams(DIRECT_MAX_CONCURRENT_STREAMS);
@@ -368,7 +363,10 @@ mod tests {
         };
         let json = serde_json::to_vec(&resp).unwrap();
         let decoded: DirectResponse = serde_json::from_slice(&json).unwrap();
-        assert_eq!(decoded.status, DirectResponseStatus::Error("test error".into()));
+        assert_eq!(
+            decoded.status,
+            DirectResponseStatus::Error("test error".into())
+        );
     }
 
     #[test]
@@ -438,14 +436,25 @@ mod tests {
     #[test]
     fn test_payload_variants_roundtrip() {
         let payloads = vec![
-            DirectPayload::KeyOffer { public_key: vec![1u8; 32] },
-            DirectPayload::KeyAccept { public_key: vec![2u8; 32] },
-            DirectPayload::Encrypted { ciphertext: vec![3u8; 28] },
-            DirectPayload::IdentityClaim { identity_json: b"{}".to_vec() },
+            DirectPayload::KeyOffer {
+                public_key: vec![1u8; 32],
+            },
+            DirectPayload::KeyAccept {
+                public_key: vec![2u8; 32],
+            },
+            DirectPayload::Encrypted {
+                ciphertext: vec![3u8; 28],
+            },
+            DirectPayload::IdentityClaim {
+                identity_json: b"{}".to_vec(),
+            },
         ];
 
         for payload in payloads {
-            let req = DirectRequest { request_id: 42, payload };
+            let req = DirectRequest {
+                request_id: 42,
+                payload,
+            };
             let json = serde_json::to_vec(&req).unwrap();
             let decoded: DirectRequest = serde_json::from_slice(&json).unwrap();
             assert_eq!(req, decoded);
@@ -456,7 +465,9 @@ mod tests {
     async fn test_codec_request_response_serialization() {
         let req = DirectRequest {
             request_id: 42,
-            payload: DirectPayload::Encrypted { ciphertext: vec![1, 2, 3] },
+            payload: DirectPayload::Encrypted {
+                ciphertext: vec![1, 2, 3],
+            },
         };
         let json = serde_json::to_vec(&req).unwrap();
         let decoded: DirectRequest = serde_json::from_slice(&json).unwrap();
@@ -478,8 +489,10 @@ mod tests {
         std::thread::sleep(Duration::from_millis(150));
 
         let msgs = store.drain(&peer);
-        assert!(msgs.is_none() || msgs.unwrap().is_empty(),
-            "expired messages should be evicted on drain");
+        assert!(
+            msgs.is_none() || msgs.unwrap().is_empty(),
+            "expired messages should be evicted on drain"
+        );
     }
 
     #[test]

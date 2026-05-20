@@ -6,8 +6,8 @@
 //! Wire format: JSON-encoded `AgentMessage`, wrapped in `CryptoEnvelope::Encrypted`
 //! for E2EE delivery over Gossipsub.
 
-use serde::{Serialize, Deserialize};
 use crate::identity::AgentIdentity;
+use serde::{Deserialize, Serialize};
 
 // ─── Message ID ─────────────────────────────────────────────────
 
@@ -29,7 +29,7 @@ impl MessageId {
 
         // Take last 8 chars of agent_id for brevity
         let short_agent = if sender_agent_id.len() >= 8 {
-            &sender_agent_id[sender_agent_id.len()-8..]
+            &sender_agent_id[sender_agent_id.len() - 8..]
         } else {
             sender_agent_id
         };
@@ -253,14 +253,12 @@ impl AgentMessage {
 
     /// Serialize to JSON bytes for wire transport.
     pub fn to_json_bytes(&self) -> anyhow::Result<Vec<u8>> {
-        serde_json::to_vec(self)
-            .map_err(|e| anyhow::anyhow!("serialize AgentMessage: {e}"))
+        serde_json::to_vec(self).map_err(|e| anyhow::anyhow!("serialize AgentMessage: {e}"))
     }
 
     /// Deserialize from JSON bytes.
     pub fn from_json_bytes(data: &[u8]) -> anyhow::Result<Self> {
-        serde_json::from_slice(data)
-            .map_err(|e| anyhow::anyhow!("parse AgentMessage: {e}"))
+        serde_json::from_slice(data).map_err(|e| anyhow::anyhow!("parse AgentMessage: {e}"))
     }
 
     /// Quick payload accessor helpers.
@@ -294,53 +292,52 @@ impl AgentMessage {
 /// Helper methods for creating common message types.
 impl AgentMessage {
     /// "Can you do X?" — intent negotiation.
-    pub fn intent(
-        from: &AgentIdentity,
-        action: &str,
-        params: serde_json::Value,
-    ) -> Self {
-        Self::new(from, MessageProtocol::IntentNegotiation, serde_json::json!({
-            "action": action,
-            "params": params,
-        }))
+    pub fn intent(from: &AgentIdentity, action: &str, params: serde_json::Value) -> Self {
+        Self::new(
+            from,
+            MessageProtocol::IntentNegotiation,
+            serde_json::json!({
+                "action": action,
+                "params": params,
+            }),
+        )
     }
 
     /// "Do X." — task assignment.
-    pub fn task(
-        from: &AgentIdentity,
-        task: &str,
-        payload: serde_json::Value,
-    ) -> Self {
-        Self::new(from, MessageProtocol::TaskAssignment, serde_json::json!({
-            "task": task,
-            "data": payload,
-        }))
+    pub fn task(from: &AgentIdentity, task: &str, payload: serde_json::Value) -> Self {
+        Self::new(
+            from,
+            MessageProtocol::TaskAssignment,
+            serde_json::json!({
+                "task": task,
+                "data": payload,
+            }),
+        )
     }
 
     /// "Here's how it's going." — status report.
-    pub fn status(
-        from: &AgentIdentity,
-        status: &str,
-        percent: u8,
-        note: &str,
-    ) -> Self {
-        Self::new(from, MessageProtocol::StatusReport, serde_json::json!({
-            "status": status,
-            "percent": percent,
-            "note": note,
-        }))
+    pub fn status(from: &AgentIdentity, status: &str, percent: u8, note: &str) -> Self {
+        Self::new(
+            from,
+            MessageProtocol::StatusReport,
+            serde_json::json!({
+                "status": status,
+                "percent": percent,
+                "note": note,
+            }),
+        )
     }
 
     /// "Here's the data." — data exchange.
-    pub fn data(
-        from: &AgentIdentity,
-        format: &str,
-        data: serde_json::Value,
-    ) -> Self {
-        Self::new(from, MessageProtocol::DataExchange, serde_json::json!({
-            "format": format,
-            "data": data,
-        }))
+    pub fn data(from: &AgentIdentity, format: &str, data: serde_json::Value) -> Self {
+        Self::new(
+            from,
+            MessageProtocol::DataExchange,
+            serde_json::json!({
+                "format": format,
+                "data": data,
+            }),
+        )
     }
 
     /// "Human, look at this." — escalate to human.
@@ -350,27 +347,39 @@ impl AgentMessage {
         summary: &str,
         context: serde_json::Value,
     ) -> Self {
-        Self::new(from, MessageProtocol::HumanHandoff, serde_json::json!({
-            "reason": reason,
-            "summary": summary,
-            "context": context,
-        }))
+        Self::new(
+            from,
+            MessageProtocol::HumanHandoff,
+            serde_json::json!({
+                "reason": reason,
+                "summary": summary,
+                "context": context,
+            }),
+        )
         .requires_human()
     }
 
     /// Simple text message (uses DataExchange under the hood).
     pub fn text(from: &AgentIdentity, text: &str) -> Self {
-        Self::new(from, MessageProtocol::DataExchange, serde_json::json!({
-            "text": text,
-        }))
+        Self::new(
+            from,
+            MessageProtocol::DataExchange,
+            serde_json::json!({
+                "text": text,
+            }),
+        )
     }
 
     /// "I'm alive." — heartbeat for presence.
     pub fn heartbeat(from: &AgentIdentity, status: &str, load: f32) -> AgentMessage {
-        AgentMessage::new(from, MessageProtocol::Heartbeat, serde_json::json!({
-            "status": status,
-            "load": load,
-        }))
+        AgentMessage::new(
+            from,
+            MessageProtocol::Heartbeat,
+            serde_json::json!({
+                "status": status,
+                "load": load,
+            }),
+        )
     }
 }
 
@@ -431,8 +440,14 @@ mod tests {
 
     #[test]
     fn test_protocol_display() {
-        assert_eq!(format!("{}", MessageProtocol::IntentNegotiation), "IntentNegotiation");
-        assert_eq!(format!("{}", MessageProtocol::TaskAssignment), "TaskAssignment");
+        assert_eq!(
+            format!("{}", MessageProtocol::IntentNegotiation),
+            "IntentNegotiation"
+        );
+        assert_eq!(
+            format!("{}", MessageProtocol::TaskAssignment),
+            "TaskAssignment"
+        );
         assert_eq!(format!("{}", MessageProtocol::StatusReport), "StatusReport");
         assert_eq!(format!("{}", MessageProtocol::DataExchange), "DataExchange");
         assert_eq!(format!("{}", MessageProtocol::HumanHandoff), "HumanHandoff");
@@ -524,8 +539,12 @@ mod tests {
         let bob = make_test_agent("Bob");
 
         // Alice sends a task to Bob
-        let original = AgentMessage::new(&alice, MessageProtocol::TaskAssignment, serde_json::json!({"task":"X"}))
-            .to(&bob.agent_id);
+        let original = AgentMessage::new(
+            &alice,
+            MessageProtocol::TaskAssignment,
+            serde_json::json!({"task":"X"}),
+        )
+        .to(&bob.agent_id);
 
         // Bob replies -- from_agent must be Bob, not Alice
         let reply = original.make_reply(&bob, serde_json::json!({"result":"ok"}));
@@ -544,7 +563,11 @@ mod tests {
     #[test]
     fn test_intent_builder() {
         let agent = make_test_agent("A");
-        let msg = AgentMessage::intent(&agent, "code-review", serde_json::json!({"language":"rust"}));
+        let msg = AgentMessage::intent(
+            &agent,
+            "code-review",
+            serde_json::json!({"language":"rust"}),
+        );
         assert_eq!(msg.protocol, MessageProtocol::IntentNegotiation);
         assert_eq!(msg.payload["action"], "code-review");
     }
@@ -577,7 +600,12 @@ mod tests {
     #[test]
     fn test_human_handoff_builder() {
         let agent = make_test_agent("A");
-        let msg = AgentMessage::human_handoff(&agent, "approval", "Budget exceeded", serde_json::json!({"amount":9999}));
+        let msg = AgentMessage::human_handoff(
+            &agent,
+            "approval",
+            "Budget exceeded",
+            serde_json::json!({"amount":9999}),
+        );
         assert_eq!(msg.protocol, MessageProtocol::HumanHandoff);
         assert!(msg.requires_human);
         assert_eq!(msg.payload["reason"], "approval");
@@ -598,15 +626,19 @@ mod tests {
         let agent = make_test_agent("Rustacean");
         let original_id = MessageId::generate("did:chorus:xyz");
 
-        let msg = AgentMessage::new(&agent, MessageProtocol::TaskAssignment, serde_json::json!({
-            "task": "review-pr",
-            "target": "#42",
-            "deadline_ms": 3600000
-        }))
-            .to("did:chorus:receiver")
-            .priority(Priority::URGENT)
-            .requires_human()
-            .reply_to(&original_id);
+        let msg = AgentMessage::new(
+            &agent,
+            MessageProtocol::TaskAssignment,
+            serde_json::json!({
+                "task": "review-pr",
+                "target": "#42",
+                "deadline_ms": 3600000
+            }),
+        )
+        .to("did:chorus:receiver")
+        .priority(Priority::URGENT)
+        .requires_human()
+        .reply_to(&original_id);
 
         // Serialize
         let json_bytes = msg.to_json_bytes().unwrap();
@@ -661,11 +693,15 @@ mod tests {
     #[test]
     fn test_payload_accessors() {
         let agent = make_test_agent("A");
-        let msg = AgentMessage::new(&agent, MessageProtocol::StatusReport, serde_json::json!({
-            "status": "ok",
-            "percent": 50,
-            "note": "halfway"
-        }));
+        let msg = AgentMessage::new(
+            &agent,
+            MessageProtocol::StatusReport,
+            serde_json::json!({
+                "status": "ok",
+                "percent": 50,
+                "note": "halfway"
+            }),
+        );
 
         assert_eq!(msg.payload_str("status"), Some("ok"));
         assert_eq!(msg.payload_i64("percent"), Some(50));
@@ -679,8 +715,8 @@ mod tests {
     #[test]
     fn test_summary() {
         let agent = make_test_agent("Alice");
-        let direct = AgentMessage::task(&agent, "review", serde_json::json!({}))
-            .to("did:chorus:bob");
+        let direct =
+            AgentMessage::task(&agent, "review", serde_json::json!({})).to("did:chorus:bob");
         assert!(direct.summary().contains("Alice"));
         assert!(direct.summary().contains("did:chorus:bob"));
         assert!(direct.summary().contains("TASK"));

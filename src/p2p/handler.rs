@@ -76,7 +76,10 @@ fn process_decrypted_payload(
         match identity.verify() {
             Ok(()) => {
                 tracing::info!(target: "identity", "🪪 verified agent '{}' from {from}", identity.display_name);
-                let _ = event_tx.send(P2PEvent::AgentIdentified { peer_id: from, identity });
+                let _ = event_tx.send(P2PEvent::AgentIdentified {
+                    peer_id: from,
+                    identity,
+                });
             }
             Err(e) => {
                 tracing::warn!(target: "identity", "🪪 identity verification failed from {from}: {e}");
@@ -93,7 +96,10 @@ fn process_decrypted_payload(
             agent_msg.protocol.tag(),
             agent_msg.from_agent.display_name,
         );
-        let _ = event_tx.send(P2PEvent::StructuredMessage { from, message: agent_msg });
+        let _ = event_tx.send(P2PEvent::StructuredMessage {
+            from,
+            message: agent_msg,
+        });
     } else {
         let _ = event_tx.send(P2PEvent::EncryptedMessage { from, plaintext });
     }
@@ -105,7 +111,9 @@ fn process_decrypted_payload(
 fn verify_identity_claim(identity_json: &[u8]) -> Result<AgentIdentity, String> {
     let identity: AgentIdentity =
         serde_json::from_slice(identity_json).map_err(|e| format!("invalid identity JSON: {e}"))?;
-    identity.verify().map_err(|e| format!("identity verification: {e}"))?;
+    identity
+        .verify()
+        .map_err(|e| format!("identity verification: {e}"))?;
     tracing::info!(target: "identity", "🪪 verified agent '{}'", identity.display_name);
     Ok(identity)
 }
@@ -163,11 +171,13 @@ pub(crate) fn handle_direct_request(
 
     match request.payload {
         // ── Key exchange ──
-
         DirectPayload::KeyOffer { public_key } => {
             tracing::info!(target: "crypto", "🔑 KeyOffer from {from} (direct)");
             if let Err(reason) = establish_session(from, &public_key, crypto, my_keys, event_tx) {
-                return DirectResponse { request_id, status: DirectResponseStatus::Error(reason) };
+                return DirectResponse {
+                    request_id,
+                    status: DirectResponseStatus::Error(reason),
+                };
             }
 
             // Send our AgentIdentity if configured
@@ -186,13 +196,15 @@ pub(crate) fn handle_direct_request(
         DirectPayload::KeyAccept { public_key } => {
             tracing::info!(target: "crypto", "🔑 KeyAccept from {from} (direct)");
             if let Err(reason) = establish_session(from, &public_key, crypto, my_keys, event_tx) {
-                return DirectResponse { request_id, status: DirectResponseStatus::Error(reason) };
+                return DirectResponse {
+                    request_id,
+                    status: DirectResponseStatus::Error(reason),
+                };
             }
             direct::ok_response(request_id)
         }
 
         // ── Encrypted payload ──
-
         DirectPayload::Encrypted { ciphertext } => {
             match crypto.decrypt_from(&peer_str, &ciphertext) {
                 Ok(plaintext) => {
@@ -214,7 +226,6 @@ pub(crate) fn handle_direct_request(
         }
 
         // ── Identity claim ──
-
         DirectPayload::IdentityClaim { identity_json } => {
             match verify_identity_claim(&identity_json) {
                 Ok(identity) => {
@@ -226,12 +237,18 @@ pub(crate) fn handle_direct_request(
                             identity.public_key.clone(),
                         );
                     }
-                    let _ = event_tx.send(P2PEvent::AgentIdentified { peer_id: from, identity });
+                    let _ = event_tx.send(P2PEvent::AgentIdentified {
+                        peer_id: from,
+                        identity,
+                    });
                     direct::ok_response(request_id)
                 }
                 Err(reason) => {
                     tracing::warn!(target: "identity", "🪪 {reason} from {from}");
-                    DirectResponse { request_id, status: DirectResponseStatus::Error(reason) }
+                    DirectResponse {
+                        request_id,
+                        status: DirectResponseStatus::Error(reason),
+                    }
                 }
             }
         }
@@ -301,7 +318,10 @@ pub(crate) fn handle_crypto_envelope(
                             identity.public_key.clone(),
                         );
                     }
-                    let _ = event_tx.send(P2PEvent::AgentIdentified { peer_id: from, identity });
+                    let _ = event_tx.send(P2PEvent::AgentIdentified {
+                        peer_id: from,
+                        identity,
+                    });
                 }
                 Err(reason) => {
                     tracing::warn!(target: "identity", "🪪 {reason} from {from}");
@@ -341,9 +361,7 @@ mod tests {
 
     #[test]
     fn test_verify_identity_claim_tampered() {
-        let (mut identity, _) = IdentityBuilder::new("Honest")
-            .build()
-            .unwrap();
+        let (mut identity, _) = IdentityBuilder::new("Honest").build().unwrap();
         identity.display_name = "Impostor".to_string();
         let json = serde_json::to_vec(&identity).unwrap();
         let result = verify_identity_claim(&json);
@@ -353,9 +371,7 @@ mod tests {
     #[test]
     fn test_process_decrypted_payload_identity() {
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let (identity, _) = IdentityBuilder::new("PayloadTest")
-            .build()
-            .unwrap();
+        let (identity, _) = IdentityBuilder::new("PayloadTest").build().unwrap();
         let plaintext = serde_json::to_vec(&identity).unwrap();
         let peer = PeerId::random();
 

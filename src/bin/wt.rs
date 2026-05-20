@@ -6,12 +6,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use chorus_core::identity::IdentityBuilder;
+use chorus_core::p2p::{P2PConfig, P2PEvent, P2PNetwork};
 use clap::{Parser, Subcommand};
 use ed25519_dalek::SigningKey;
 use rand::RngCore;
 use tokio::io::{AsyncBufReadExt, BufReader};
-use chorus_core::identity::IdentityBuilder;
-use chorus_core::p2p::{P2PConfig, P2PEvent, P2PNetwork};
 
 /// Global flag: when true, output JSON lines instead of human-readable text.
 static JSON_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -339,7 +339,14 @@ async fn main() -> anyhow::Result<()> {
 
     let cli = Cli::parse();
     match cli.command {
-        Command::Start { port, name, relay, no_repl, relay_peers, json } => {
+        Command::Start {
+            port,
+            name,
+            relay,
+            no_repl,
+            relay_peers,
+            json,
+        } => {
             JSON_MODE.store(json, std::sync::atomic::Ordering::Relaxed);
             let display = name.unwrap_or_else(|| {
                 hostname::get()
@@ -348,11 +355,14 @@ async fn main() -> anyhow::Result<()> {
             });
             let (identity, _signing_key) = load_or_create_identity(&display)?;
             if JSON_MODE.load(std::sync::atomic::Ordering::Relaxed) {
-                println!("{}", serde_json::json!({
-                    "type":"identity_ready",
-                    "did":identity.agent_id,
-                    "display_name":display.clone()
-                }));
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "type":"identity_ready",
+                        "did":identity.agent_id,
+                        "display_name":display.clone()
+                    })
+                );
             }
             println!("🪪 {}", identity.agent_id);
             println!("👤 {}", display);

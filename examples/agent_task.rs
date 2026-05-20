@@ -16,15 +16,14 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::Mutex;
 
 use chorus_core::identity::{AgentIdentity, IdentityBuilder, IdentityEnvelope};
-use chorus_core::protocol::{AgentMessage, MessageProtocol};
 use chorus_core::p2p::{P2PEvent, P2PNetwork};
+use chorus_core::protocol::{AgentMessage, MessageProtocol};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
 
@@ -71,7 +70,9 @@ async fn main() -> anyhow::Result<()> {
 
         while let Ok(Some(line)) = lines.next_line().await {
             let line = line.trim().to_string();
-            if line.is_empty() { continue; }
+            if line.is_empty() {
+                continue;
+            }
             let parts: Vec<&str> = line.split_whitespace().collect();
 
             match parts.first().copied() {
@@ -102,7 +103,11 @@ async fn main() -> anyhow::Result<()> {
                     }
                     let status = parts[1];
                     let pct: u8 = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
-                    let note = if parts.len() > 3 { parts[3..].join(" ") } else { String::new() };
+                    let note = if parts.len() > 3 {
+                        parts[3..].join(" ")
+                    } else {
+                        String::new()
+                    };
                     let msg = AgentMessage::status(&my_id, status, pct, &note);
                     println!("  [STATUS→] {} — {}%", my_id.display_name, pct);
                     if let Ok(bytes) = msg.to_json_bytes() {
@@ -162,7 +167,8 @@ async fn main() -> anyhow::Result<()> {
                     } else {
                         println!("  Discovered Agents:");
                         for (_, identity) in agents.iter() {
-                            println!("    {} — {} [{:?}]",
+                            println!(
+                                "    {} — {} [{:?}]",
                                 identity.short_id(),
                                 identity.display_name,
                                 identity.capabilities,
@@ -224,12 +230,16 @@ async fn main() -> anyhow::Result<()> {
             }
 
             P2PEvent::AgentIdentified { peer_id, identity } => {
-                println!("  [IDENTITY✓] {} — {} [{:?}]",
+                println!(
+                    "  [IDENTITY✓] {} — {} [{:?}]",
                     identity.short_id(),
                     identity.display_name,
                     identity.capabilities,
                 );
-                known_agents.lock().await.insert(peer_id.to_string(), identity);
+                known_agents
+                    .lock()
+                    .await
+                    .insert(peer_id.to_string(), identity);
             }
 
             P2PEvent::IdentityVerificationFailed { peer_id, reason } => {
@@ -248,8 +258,12 @@ async fn main() -> anyhow::Result<()> {
                     match envelope.verify() {
                         Ok(()) => {
                             let id = &envelope.identity;
-                            println!("  [IDENTITY✓] {} — {} [{:?}]",
-                                id.short_id(), id.display_name, id.capabilities);
+                            println!(
+                                "  [IDENTITY✓] {} — {} [{:?}]",
+                                id.short_id(),
+                                id.display_name,
+                                id.capabilities
+                            );
                             known_agents.lock().await.insert(from_str, id.clone());
                         }
                         Err(e) => println!("  [IDENTITY✗] Verification failed: {}", e),
@@ -282,7 +296,10 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    println!("\n  Terminated. Agents known: {}", known_agents.lock().await.len());
+    println!(
+        "\n  Terminated. Agents known: {}",
+        known_agents.lock().await.len()
+    );
     Ok(())
 }
 
@@ -296,22 +313,33 @@ async fn handle_structured_message(
     match msg.protocol {
         MessageProtocol::Heartbeat => {
             if let Some(status) = msg.payload_str("status") {
-                let load = msg.payload_object()
+                let load = msg
+                    .payload_object()
                     .and_then(|o| o.get("load").and_then(|v| v.as_f64()))
                     .unwrap_or(0.0);
-                println!("  [PING←] {} — {} (load: {:.0}%)",
-                    msg.from_agent.display_name, status, load * 100.0);
+                println!(
+                    "  [PING←] {} — {} (load: {:.0}%)",
+                    msg.from_agent.display_name,
+                    status,
+                    load * 100.0
+                );
             }
         }
 
         MessageProtocol::TaskAssignment => {
             let task = msg.payload_str("task").unwrap_or("?");
-            println!("  [TASK←] {} → me: {} — {:?}", msg.from_agent.display_name, task, msg.payload);
+            println!(
+                "  [TASK←] {} → me: {} — {:?}",
+                msg.from_agent.display_name, task, msg.payload
+            );
             // Auto-reply: accept
-            let reply = msg.make_reply(&my_identity, serde_json::json!({
-                "status": "accepted",
-                "eta_ms": 5000,
-            }));
+            let reply = msg.make_reply(
+                &my_identity,
+                serde_json::json!({
+                    "status": "accepted",
+                    "eta_ms": 5000,
+                }),
+            );
             if let Ok(bytes) = reply.to_json_bytes() {
                 let _ = network.broadcast(bytes).await;
             }
@@ -322,22 +350,32 @@ async fn handle_structured_message(
             let _status = msg.payload_str("status").unwrap_or("?");
             let pct = msg.payload_i64("percent").unwrap_or(0);
             let note = msg.payload_str("note").unwrap_or("");
-            println!("  [STATUS←] {} — {}% — {}", msg.from_agent.display_name, pct, note);
+            println!(
+                "  [STATUS←] {} — {}% — {}",
+                msg.from_agent.display_name, pct, note
+            );
         }
 
         MessageProtocol::IntentNegotiation => {
             let action = msg.payload_str("action").unwrap_or("?");
-            println!("  [INTENT←] {} asks: {} — {:?}", msg.from_agent.display_name, action, msg.payload);
+            println!(
+                "  [INTENT←] {} asks: {} — {:?}",
+                msg.from_agent.display_name, action, msg.payload
+            );
             // Auto-reply if we have the capability mentioned in params
-            let can_do = msg.payload_object()
+            let can_do = msg
+                .payload_object()
                 .and_then(|o| o.get("capability"))
                 .and_then(|v| v.as_str())
                 .map(|cap| my_identity.has_capability(cap))
                 .unwrap_or(true);
-            let reply = msg.make_reply(&my_identity, serde_json::json!({
-                "can_do": can_do,
-                "eta_ms": if can_do { 3000 } else { 0 },
-            }));
+            let reply = msg.make_reply(
+                &my_identity,
+                serde_json::json!({
+                    "can_do": can_do,
+                    "eta_ms": if can_do { 3000 } else { 0 },
+                }),
+            );
             if let Ok(bytes) = reply.to_json_bytes() {
                 let _ = network.broadcast(bytes).await;
             }
@@ -348,15 +386,20 @@ async fn handle_structured_message(
             if let Some(text) = msg.payload_str("text") {
                 println!("  [TEXT←] {}: {}", msg.from_agent.display_name, text);
             } else {
-                println!("  [DATA←] {} sent data: {:?}", msg.from_agent.display_name, msg.payload);
+                println!(
+                    "  [DATA←] {} sent data: {:?}",
+                    msg.from_agent.display_name, msg.payload
+                );
             }
         }
 
         MessageProtocol::HumanHandoff => {
             let reason = msg.payload_str("reason").unwrap_or("?");
             let summary = msg.payload_str("summary").unwrap_or("");
-            println!("  [🚨HUMAN←] {} escalated: {} — {}",
-                msg.from_agent.display_name, reason, summary);
+            println!(
+                "  [🚨HUMAN←] {} escalated: {} — {}",
+                msg.from_agent.display_name, reason, summary
+            );
         }
     }
 }

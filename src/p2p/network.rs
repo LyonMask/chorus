@@ -60,10 +60,7 @@ impl P2PNetwork {
                 libp2p::noise::Config::new,
                 libp2p::yamux::Config::default,
             )?
-            .with_relay_client(
-                libp2p::noise::Config::new,
-                libp2p::yamux::Config::default,
-            )?
+            .with_relay_client(libp2p::noise::Config::new, libp2p::yamux::Config::default)?
             .with_behaviour(|key: &libp2p::identity::Keypair, relay_client| {
                 let local_peer_id = key.public().to_peer_id();
 
@@ -584,7 +581,13 @@ impl P2PNetwork {
             }
         });
 
-        Ok((Self { peer_id, cmd_tx: struct_cmd_tx }, event_rx))
+        Ok((
+            Self {
+                peer_id,
+                cmd_tx: struct_cmd_tx,
+            },
+            event_rx,
+        ))
     }
 
     /// Create with default config.

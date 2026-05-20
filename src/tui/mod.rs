@@ -5,7 +5,7 @@
 //!
 //! Separated from rendering so `cargo test --lib` works without TTY.
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::identity::AgentIdentity;
@@ -53,19 +53,32 @@ impl ActivityAction {
             }
             MessageProtocol::IntentNegotiation => {
                 let action = msg.payload_str("action").unwrap_or("?");
-                (Self::CapabilityQuery,
-                    format!("{} asked: can you {}?", actor, action))
+                (
+                    Self::CapabilityQuery,
+                    format!("{} asked: can you {}?", actor, action),
+                )
             }
             MessageProtocol::TaskAssignment => {
                 let task = msg.payload_str("task").unwrap_or("a task");
-                let target = if msg.to_agent.is_empty() { "ALL".into() } else { msg.to_agent.clone() };
-                (Self::TaskAssigned, format!("{} assigned \"{}\" to {}", actor, task, target))
+                let target = if msg.to_agent.is_empty() {
+                    "ALL".into()
+                } else {
+                    msg.to_agent.clone()
+                };
+                (
+                    Self::TaskAssigned,
+                    format!("{} assigned \"{}\" to {}", actor, task, target),
+                )
             }
             MessageProtocol::StatusReport => {
                 let status = msg.payload_str("status").unwrap_or("?");
                 let pct = msg.payload_i64("percent").unwrap_or(0);
                 let note = msg.payload_str("note").unwrap_or("");
-                let note_part = if note.is_empty() { String::new() } else { format!(" — {}", note) };
+                let note_part = if note.is_empty() {
+                    String::new()
+                } else {
+                    format!(" — {}", note)
+                };
                 let action = match status {
                     "pending" => Self::TaskAccepted,
                     "in_progress" => Self::TaskProgress,
@@ -74,7 +87,10 @@ impl ActivityAction {
                     "blocked" => Self::TaskBlocked,
                     _ => Self::TaskProgress,
                 };
-                (action, format!("{} [{}]: {}%{}", actor, status, pct, note_part))
+                (
+                    action,
+                    format!("{} [{}]: {}%{}", actor, status, pct, note_part),
+                )
             }
             MessageProtocol::DataExchange => {
                 if msg.payload_str("text").is_some() {
@@ -82,14 +98,27 @@ impl ActivityAction {
                     (Self::TextMessage, format!("{}: \"{}\"", actor, text))
                 } else {
                     let schema = msg.payload_str("schema").unwrap_or("data");
-                    (Self::DataExchanged, format!("{} sent {} to {}", actor, schema,
-                        if msg.to_agent.is_empty() { "ALL".into() } else { msg.to_agent.clone() }))
+                    (
+                        Self::DataExchanged,
+                        format!(
+                            "{} sent {} to {}",
+                            actor,
+                            schema,
+                            if msg.to_agent.is_empty() {
+                                "ALL".into()
+                            } else {
+                                msg.to_agent.clone()
+                            }
+                        ),
+                    )
                 }
             }
             MessageProtocol::HumanHandoff => {
                 let summary = msg.payload_str("summary").unwrap_or("needs human");
-                (Self::HumanEscalation,
-                    format!("🚨 {} needs human: {}", actor, summary))
+                (
+                    Self::HumanEscalation,
+                    format!("🚨 {} needs human: {}", actor, summary),
+                )
             }
         }
     }
@@ -294,7 +323,8 @@ impl TuiApp {
     // ── Agent Management ──
 
     pub fn add_agent(&mut self, peer_key: &str, name: &str, did: &str) {
-        self.agents.entry(peer_key.to_string())
+        self.agents
+            .entry(peer_key.to_string())
             .or_insert_with(|| AgentInfo::new(peer_key, name, did));
     }
 
@@ -305,22 +335,25 @@ impl TuiApp {
         }
         if let Some(name) = name {
             self.push_activity(ActivityItem::new(
-                &name, ActivityAction::AgentOffline,
+                &name,
+                ActivityAction::AgentOffline,
                 &format!("{} went offline", name),
             ));
         }
     }
 
     pub fn update_agent_from_identity(&mut self, peer_key: &str, identity: &AgentIdentity) {
-        let agent = self.agents.entry(peer_key.to_string())
-            .or_insert_with(|| AgentInfo::new(peer_key, &identity.display_name, &identity.agent_id));
+        let agent = self.agents.entry(peer_key.to_string()).or_insert_with(|| {
+            AgentInfo::new(peer_key, &identity.display_name, &identity.agent_id)
+        });
         agent.display_name = identity.display_name.clone();
         agent.did = identity.agent_id.clone();
         agent.capabilities = identity.capabilities.clone();
         agent.online = true;
 
         self.push_activity(ActivityItem::new(
-            &identity.display_name, ActivityAction::IdentityVerified,
+            &identity.display_name,
+            ActivityAction::IdentityVerified,
             &format!("✅ {} identity verified", identity.display_name),
         ));
     }
@@ -376,14 +409,12 @@ impl TuiApp {
             let _id = self.alerts.len();
             let reason = msg.payload_str("reason").unwrap_or("unknown").to_string();
             let summary = msg.payload_str("summary").unwrap_or("").to_string();
-            let context = msg.payload_object()
+            let context = msg
+                .payload_object()
                 .and_then(|o| o.get("context").cloned())
                 .map(|v| v.to_string())
                 .unwrap_or_default();
-            self.add_alert(
-                &msg.from_agent.display_name,
-                &reason, &summary, &context,
-            );
+            self.add_alert(&msg.from_agent.display_name, &reason, &summary, &context);
         }
     }
 
@@ -391,7 +422,8 @@ impl TuiApp {
 
     pub fn add_alert(&mut self, from: &str, reason: &str, summary: &str, context: &str) {
         let _id = self.alerts.len();
-        self.alerts.push(Alert::new(_id, from, reason, summary, context));
+        self.alerts
+            .push(Alert::new(_id, from, reason, summary, context));
         self.pending_approvals += 1;
         // Auto-switch to alert view
         if self.mode == AppMode::Dashboard {
@@ -408,7 +440,8 @@ impl TuiApp {
                 alert.status = AlertStatus::Approved;
                 self.pending_approvals = self.pending_approvals.saturating_sub(1);
                 self.push_activity(ActivityItem::new(
-                    "Human", ActivityAction::Approved,
+                    "Human",
+                    ActivityAction::Approved,
                     &format!("✅ Approved alert from {}", from),
                 ));
                 self.advance_to_next_pending();
@@ -426,7 +459,8 @@ impl TuiApp {
                 alert.status = AlertStatus::Rejected;
                 self.pending_approvals = self.pending_approvals.saturating_sub(1);
                 self.push_activity(ActivityItem::new(
-                    "Human", ActivityAction::Rejected,
+                    "Human",
+                    ActivityAction::Rejected,
                     &format!("❌ Rejected alert from {}", from),
                 ));
                 self.advance_to_next_pending();
@@ -492,9 +526,15 @@ impl TuiApp {
                 }
             }
             Key::GoToDashboard => self.mode = AppMode::Dashboard,
-            Key::Approve if self.mode == AppMode::AlertDetail => { self.approve_selected_alert(); }
-            Key::Reject if self.mode == AppMode::AlertDetail => { self.reject_selected_alert(); }
-            Key::Dismiss if self.mode == AppMode::AlertDetail => { self.dismiss_selected_alert(); }
+            Key::Approve if self.mode == AppMode::AlertDetail => {
+                self.approve_selected_alert();
+            }
+            Key::Reject if self.mode == AppMode::AlertDetail => {
+                self.reject_selected_alert();
+            }
+            Key::Dismiss if self.mode == AppMode::AlertDetail => {
+                self.dismiss_selected_alert();
+            }
             Key::Next if self.mode == AppMode::AlertDetail => self.next_alert(),
             Key::Prev if self.mode == AppMode::AlertDetail => self.prev_alert(),
             _ => {}
@@ -507,7 +547,8 @@ impl TuiApp {
         format!(
             "Agents: {} online | Tasks: {}/{} | Events: {} | Alerts: {} pending",
             self.online_agent_count(),
-            self.tasks_completed, self.tasks_assigned,
+            self.tasks_completed,
+            self.tasks_assigned,
             self.event_count,
             self.pending_approvals,
         )
@@ -531,31 +572,36 @@ impl TuiApp {
 
         // Simulate task flow
         self.push_activity(ActivityItem::new(
-            "Alice", ActivityAction::TaskAssigned,
+            "Alice",
+            ActivityAction::TaskAssigned,
             "Alice assigned \"code-review\" to Rustacean",
         ));
         self.tasks_assigned += 1;
 
         self.push_activity(ActivityItem::new(
-            "Rustacean", ActivityAction::TaskProgress,
+            "Rustacean",
+            ActivityAction::TaskProgress,
             "Rustacean [in_progress]: 50% — Checking encryption layer...",
         ));
 
         self.push_activity(ActivityItem::new(
-            "Rustacean", ActivityAction::TaskCompleted,
+            "Rustacean",
+            ActivityAction::TaskCompleted,
             "Rustacean [completed]: 100% — Code review done, 2 findings",
         ));
         self.tasks_completed += 1;
 
         // Create alert
         self.add_alert(
-            "Bridge", "review_complete",
+            "Bridge",
+            "review_complete",
             "Code review passed. 2 findings need human review.",
             "Reviewer: Rustacean\nVerdict: PASS\nFindings: 2 (1 info, 1 warning)",
         );
 
         self.push_activity(ActivityItem::new(
-            "Alice", ActivityAction::TaskAssigned,
+            "Alice",
+            ActivityAction::TaskAssigned,
             "Alice assigned \"human-review\" to Bridge",
         ));
         self.tasks_assigned += 1;
@@ -593,7 +639,7 @@ pub fn now_millis() -> u64 {
 mod tests {
     use super::*;
     use crate::identity::IdentityBuilder;
-    
+
     use serde_json::json;
 
     fn make_test_identity(name: &str) -> AgentIdentity {
@@ -688,7 +734,8 @@ mod tests {
     #[test]
     fn test_activity_action_from_human_handoff() {
         let id = make_test_identity("Bridge");
-        let msg = AgentMessage::human_handoff(&id, "approval", "Over budget", json!({"amount": 500}));
+        let msg =
+            AgentMessage::human_handoff(&id, "approval", "Over budget", json!({"amount": 500}));
         let (action, detail) = ActivityAction::from_message(&msg);
         assert_eq!(action, ActivityAction::HumanEscalation);
         assert!(detail.contains("Over budget"));
@@ -728,7 +775,11 @@ mod tests {
 
     #[test]
     fn test_activity_item_summary() {
-        let item = ActivityItem::new("Alice", ActivityAction::TaskAssigned, "assigned code-review");
+        let item = ActivityItem::new(
+            "Alice",
+            ActivityAction::TaskAssigned,
+            "assigned code-review",
+        );
         let summary = item.human_summary();
         assert!(summary.contains("📋"));
         assert!(summary.contains("Alice"));
@@ -780,7 +831,10 @@ mod tests {
         assert_eq!(app.online_agent_count(), 0);
         assert!(!app.agents["p1"].online);
         // Should create an activity
-        assert!(app.activities.iter().any(|a| a.action == ActivityAction::AgentOffline));
+        assert!(app
+            .activities
+            .iter()
+            .any(|a| a.action == ActivityAction::AgentOffline));
     }
 
     #[test]
@@ -830,7 +884,10 @@ mod tests {
         assert_eq!(app.alerts[0].status, AlertStatus::Approved);
         assert_eq!(app.mode, AppMode::Dashboard);
         // Should have an activity
-        assert!(app.activities.iter().any(|a| a.action == ActivityAction::Approved));
+        assert!(app
+            .activities
+            .iter()
+            .any(|a| a.action == ActivityAction::Approved));
     }
 
     #[test]
@@ -970,7 +1027,11 @@ mod tests {
     fn test_activity_feed_max_500() {
         let mut app = TuiApp::new();
         for i in 0..600 {
-            app.push_activity(ActivityItem::new("Bot", ActivityAction::SystemInfo, &format!("event {}", i)));
+            app.push_activity(ActivityItem::new(
+                "Bot",
+                ActivityAction::SystemInfo,
+                &format!("event {}", i),
+            ));
         }
         assert_eq!(app.activities.len(), 500);
         // Oldest items are removed
@@ -1167,7 +1228,10 @@ mod tests {
         assert!(app.agents["p1"].online);
         assert_eq!(app.agents["p1"].capabilities, vec!["test"]);
         // Should create an IdentityVerified activity
-        assert!(app.activities.iter().any(|a| a.action == ActivityAction::IdentityVerified));
+        assert!(app
+            .activities
+            .iter()
+            .any(|a| a.action == ActivityAction::IdentityVerified));
     }
 
     #[test]
@@ -1203,7 +1267,8 @@ mod tests {
         let mut app = TuiApp::new();
         let id = make_test_identity("Worker");
         // Register agent keyed by agent_id so the load update can find it
-        app.agents.entry(id.agent_id.clone())
+        app.agents
+            .entry(id.agent_id.clone())
             .or_insert_with(|| AgentInfo::new(&id.agent_id, &id.display_name, &id.agent_id));
 
         let msg = AgentMessage::heartbeat(&id, "online", 0.75);
@@ -1415,7 +1480,13 @@ mod tests {
 
     #[test]
     fn test_alert_fields() {
-        let alert = Alert::new(7, "Bridge", "review", "Need approval", "Context details here");
+        let alert = Alert::new(
+            7,
+            "Bridge",
+            "review",
+            "Need approval",
+            "Context details here",
+        );
         assert_eq!(alert.id, 7);
         assert_eq!(alert.from_agent, "Bridge");
         assert_eq!(alert.reason, "review");

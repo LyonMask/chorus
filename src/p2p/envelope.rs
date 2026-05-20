@@ -14,17 +14,11 @@ pub const WT_TOPIC: &str = "/chorus/1.0.0";
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum CryptoEnvelope {
     /// Offer our X25519 public key to start a session.
-    KeyOffer {
-        public_key: Vec<u8>,
-    },
+    KeyOffer { public_key: Vec<u8> },
     /// Accept a key offer + send our own public key.
-    KeyAccept {
-        public_key: Vec<u8>,
-    },
+    KeyAccept { public_key: Vec<u8> },
     /// Encrypted payload (ChaCha20-Poly1305: nonce(12) || ct+tag).
-    Encrypted {
-        ciphertext: Vec<u8>,
-    },
+    Encrypted { ciphertext: Vec<u8> },
     /// Agent identity claim (sent over encrypted channel after session established).
     IdentityClaim {
         #[serde(with = "crate::identity::bytes_base64")]

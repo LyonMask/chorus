@@ -40,8 +40,7 @@ fn hms() -> String {
 async fn main() -> Result<(), Box<dyn Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .with_target(false)
         .with_thread_ids(false)
@@ -94,61 +93,64 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         while let Ok(Some(line)) = lines.next_line().await {
             let text = line.trim().to_string();
-            if text.is_empty() { continue; }
+            if text.is_empty() {
+                continue;
+            }
 
             match text.as_str() {
-                "/quit" | "/q" => { let _ = net_in.shutdown(); break; }
-                "/peers" => {
-                    match net_in.list_peers().await {
-                        Ok(peers) => {
-                            println!("Connected peers ({}):", peers.len());
-                            for p in &peers {
-                                let ok = net_in.has_session(p).await.unwrap_or(false);
-                                let icon = if ok { "🔒" } else { "🔓" };
-                                println!("  {icon} {}", short(&p.to_string()));
+                "/quit" | "/q" => {
+                    let _ = net_in.shutdown();
+                    break;
+                }
+                "/peers" => match net_in.list_peers().await {
+                    Ok(peers) => {
+                        println!("Connected peers ({}):", peers.len());
+                        for p in &peers {
+                            let ok = net_in.has_session(p).await.unwrap_or(false);
+                            let icon = if ok { "🔒" } else { "🔓" };
+                            println!("  {icon} {}", short(&p.to_string()));
+                        }
+                    }
+                    Err(e) => eprintln!("Error: {e}"),
+                },
+                "/sessions" => match net_in.list_peers().await {
+                    Ok(peers) => {
+                        let mut n = 0;
+                        for p in &peers {
+                            if net_in.has_session(p).await.unwrap_or(false) {
+                                println!("  🔒 {} — active", short(&p.to_string()));
+                                n += 1;
                             }
                         }
-                        Err(e) => eprintln!("Error: {e}"),
-                    }
-                }
-                "/sessions" => {
-                    match net_in.list_peers().await {
-                        Ok(peers) => {
-                            let mut n = 0;
-                            for p in &peers {
-                                if net_in.has_session(p).await.unwrap_or(false) {
-                                    println!("  🔒 {} — active", short(&p.to_string()));
-                                    n += 1;
-                                }
-                            }
-                            if n == 0 { println!("No encrypted sessions."); }
+                        if n == 0 {
+                            println!("No encrypted sessions.");
                         }
-                        Err(e) => eprintln!("Error: {e}"),
                     }
-                }
-                _ => {
-                    match net_in.list_peers().await {
-                        Ok(peers) => {
-                            let mut sent = 0;
-                            for p in &peers {
-                                if net_in.has_session(p).await.unwrap_or(false) {
-                                    let payload = format!("{}|{}", now_ms(), text);
-                                    match net_in.send_encrypted(*p, payload.into_bytes()).await {
-                                        Ok(_) => { sent += 1; }
-                                        Err(e) => eprintln!("Encrypt error: {e}"),
+                    Err(e) => eprintln!("Error: {e}"),
+                },
+                _ => match net_in.list_peers().await {
+                    Ok(peers) => {
+                        let mut sent = 0;
+                        for p in &peers {
+                            if net_in.has_session(p).await.unwrap_or(false) {
+                                let payload = format!("{}|{}", now_ms(), text);
+                                match net_in.send_encrypted(*p, payload.into_bytes()).await {
+                                    Ok(_) => {
+                                        sent += 1;
                                     }
+                                    Err(e) => eprintln!("Encrypt error: {e}"),
                                 }
                             }
-                            if sent > 0 {
-                                let ts = hms();
-                                println!(">> [{ts}] {my_short}: {text}  (encrypted, {sent} peer(s))");
-                            } else if !has_sess.load(Ordering::Relaxed) {
-                                println!("⚠ No encrypted session yet. Waiting...");
-                            }
                         }
-                        Err(e) => eprintln!("Error: {e}"),
+                        if sent > 0 {
+                            let ts = hms();
+                            println!(">> [{ts}] {my_short}: {text}  (encrypted, {sent} peer(s))");
+                        } else if !has_sess.load(Ordering::Relaxed) {
+                            println!("⚠ No encrypted session yet. Waiting...");
+                        }
                     }
-                }
+                    Err(e) => eprintln!("Error: {e}"),
+                },
             }
         }
     });
@@ -181,10 +183,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 }
             }
             P2PEvent::SessionFailed { peer_id, reason } => {
-                println!("❌ Session failed with {}...: {reason}", short(&peer_id.to_string()));
+                println!(
+                    "❌ Session failed with {}...: {reason}",
+                    short(&peer_id.to_string())
+                );
             }
             P2PEvent::Identify { peer_id, info } => {
-                println!("ℹ️  {} is: {}", short(&peer_id.to_string()), info.agent_version);
+                println!(
+                    "ℹ️  {} is: {}",
+                    short(&peer_id.to_string()),
+                    info.agent_version
+                );
             }
             P2PEvent::EncryptedMessage { from, plaintext } => {
                 let raw = String::from_utf8_lossy(&plaintext);
@@ -204,13 +213,24 @@ async fn main() -> Result<(), Box<dyn Error>> {
             P2PEvent::AgentIdentified { peer_id, identity } => {
                 let _ts = hms();
                 let caps = identity.capabilities.join(", ");
-                println!("[{}] 🪪 {} is {} [{}]", hms(), short(&peer_id.to_string()), identity.display_name, caps);
+                println!(
+                    "[{}] 🪪 {} is {} [{}]",
+                    hms(),
+                    short(&peer_id.to_string()),
+                    identity.display_name,
+                    caps
+                );
             }
             P2PEvent::IdentityVerificationFailed { peer_id: _, reason } => {
                 println!("❌ Identity fail: {reason}");
             }
             P2PEvent::StructuredMessage { from, message } => {
-                println!("📋 {} [{}]: {}", short(&from.to_string()), message.protocol.tag(), message.summary());
+                println!(
+                    "📋 {} [{}]: {}",
+                    short(&from.to_string()),
+                    message.protocol.tag(),
+                    message.summary()
+                );
             }
             P2PEvent::PingFailure { peer_id, error } => {
                 println!("🏓 Ping FAIL {}: {}", short(&peer_id.to_string()), error);

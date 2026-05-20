@@ -17,17 +17,15 @@ use std::time::{Duration, Instant};
 
 use crossterm::{
     event::{self, Event, KeyCode, KeyEvent},
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{
-        Block, Borders, List, ListItem, ListState, Paragraph, Wrap,
-    },
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
     Frame, Terminal,
 };
 
@@ -46,7 +44,8 @@ struct AgentInfo {
     #[allow(dead_code)]
     capabilities: Vec<String>,
     last_seen: Instant,
-    #[allow(dead_code)] tasks_active: u32,
+    #[allow(dead_code)]
+    tasks_active: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -324,8 +323,10 @@ impl App {
                 } else {
                     msg.to_agent.clone()
                 };
-                ("TASK_ASSIGNED".to_string(),
-                    format!("{} assigned \"{}\" to {}", actor, task, target))
+                (
+                    "TASK_ASSIGNED".to_string(),
+                    format!("{} assigned \"{}\" to {}", actor, task, target),
+                )
             }
             MessageProtocol::StatusReport => {
                 let status = msg.payload_str("status").unwrap_or("?");
@@ -334,9 +335,15 @@ impl App {
                 if status == "completed" {
                     self.tasks_completed += 1;
                 }
-                let note_part = if note.is_empty() { String::new() } else { format!(" — {}", note) };
-                ("STATUS".to_string(),
-                    format!("{} [{}]: {}%{}", actor, status, pct, note_part))
+                let note_part = if note.is_empty() {
+                    String::new()
+                } else {
+                    format!(" — {}", note)
+                };
+                (
+                    "STATUS".to_string(),
+                    format!("{} [{}]: {}%{}", actor, status, pct, note_part),
+                )
             }
             MessageProtocol::DataExchange => {
                 let text = msg.payload_str("text");
@@ -344,31 +351,42 @@ impl App {
                     ("TEXT".to_string(), format!("{}: \"{}\"", actor, t))
                 } else {
                     let schema = msg.payload_str("schema").unwrap_or("data");
-                    ("DATA".to_string(), format!("{} sent {} to {}", actor, schema,
-                        if msg.to_agent.is_empty() { "ALL".to_string() } else { msg.to_agent.clone() }))
+                    (
+                        "DATA".to_string(),
+                        format!(
+                            "{} sent {} to {}",
+                            actor,
+                            schema,
+                            if msg.to_agent.is_empty() {
+                                "ALL".to_string()
+                            } else {
+                                msg.to_agent.clone()
+                            }
+                        ),
+                    )
                 }
             }
             MessageProtocol::IntentNegotiation => {
                 let action_name = msg.payload_str("action").unwrap_or("?");
-                ("INTENT".to_string(), format!("{} asked: can you {}?", actor, action_name))
+                (
+                    "INTENT".to_string(),
+                    format!("{} asked: can you {}?", actor, action_name),
+                )
             }
             MessageProtocol::HumanHandoff => {
                 let reason = msg.payload_str("reason").unwrap_or("?");
                 let summary = msg.payload_str("summary").unwrap_or("");
-                let context = msg.payload_object()
+                let context = msg
+                    .payload_object()
                     .and_then(|o| o.get("context").cloned())
                     .map(|v| v.to_string())
                     .unwrap_or_default();
                 // Create alert
-                self.add_alert(
-                    &actor,
-                    reason,
-                    summary,
-                    context.as_str(),
-                    &msg.summary(),
-                );
-                ("HUMAN_ESCALATION".to_string(),
-                    format!("🚨 {} needs human: {}", actor, summary))
+                self.add_alert(&actor, reason, summary, context.as_str(), &msg.summary());
+                (
+                    "HUMAN_ESCALATION".to_string(),
+                    format!("🚨 {} needs human: {}", actor, summary),
+                )
             }
         };
 
@@ -510,51 +528,79 @@ impl App {
         // Simulate 3 agents connecting
         if self.demo_tick == 1 {
             self.demo_mode = true;
-            self.add_agent("alice", "Alice", "did:chorus:maMVNJDswURGw",
-                vec!["coordinate".into(), "strategy".into()]);
-            self.add_agent("rustacean", "Rustacean", "did:chorus:fLYf2Xc0I3qyO",
-                vec!["code-review".into(), "crypto".into(), "p2p".into()]);
-            self.add_agent("bridge", "Bridge", "did:chorus:fmYIb9jntMvbj",
-                vec!["product".into(), "review".into(), "human-handoff".into()]);
+            self.add_agent(
+                "alice",
+                "Alice",
+                "did:chorus:maMVNJDswURGw",
+                vec!["coordinate".into(), "strategy".into()],
+            );
+            self.add_agent(
+                "rustacean",
+                "Rustacean",
+                "did:chorus:fLYf2Xc0I3qyO",
+                vec!["code-review".into(), "crypto".into(), "p2p".into()],
+            );
+            self.add_agent(
+                "bridge",
+                "Bridge",
+                "did:chorus:fmYIb9jntMvbj",
+                vec!["product".into(), "review".into(), "human-handoff".into()],
+            );
             self.add_activity(ActivityItem {
-                timestamp: now_str(), actor: "System".into(),
+                timestamp: now_str(),
+                actor: "System".into(),
                 action: "INFO".into(),
                 detail: "🤖 Demo mode: 3 agents loaded. Press 'a' to view alerts.".into(),
-                is_urgent: false, requires_human: false, raw_json: String::new(),
+                is_urgent: false,
+                requires_human: false,
+                raw_json: String::new(),
             });
         }
 
         // Alice assigns task at tick 2
         if self.demo_tick == 2 {
             self.add_activity(ActivityItem {
-                timestamp: now_str(), actor: "Alice".into(),
+                timestamp: now_str(),
+                actor: "Alice".into(),
                 action: "TASK_ASSIGNED".into(),
                 detail: "Alice assigned \"code-review\" to Rustacean".into(),
-                is_urgent: false, requires_human: false, raw_json: String::new(),
+                is_urgent: false,
+                requires_human: false,
+                raw_json: String::new(),
             });
             self.tasks_assigned += 1;
         }
 
         // Rustacean progress at tick 3
         if self.demo_tick == 3 {
-            if let Some(a) = self.agents.get_mut("rustacean") { a.load = 0.5; }
+            if let Some(a) = self.agents.get_mut("rustacean") {
+                a.load = 0.5;
+            }
             self.add_activity(ActivityItem {
-                timestamp: now_str(), actor: "Rustacean".into(),
+                timestamp: now_str(),
+                actor: "Rustacean".into(),
                 action: "STATUS".into(),
                 detail: "Rustacean [in_progress]: 50% — Checking encryption layer...".into(),
-                is_urgent: false, requires_human: false, raw_json: String::new(),
+                is_urgent: false,
+                requires_human: false,
+                raw_json: String::new(),
             });
         }
 
         // Rustacean completes at tick 4
         if self.demo_tick == 4 {
             self.tasks_completed += 1;
-            if let Some(a) = self.agents.get_mut("rustacean") { a.load = 0.0; }
+            if let Some(a) = self.agents.get_mut("rustacean") {
+                a.load = 0.0;
+            }
             self.add_activity(ActivityItem {
-                timestamp: now_str(), actor: "Rustacean".into(),
+                timestamp: now_str(),
+                actor: "Rustacean".into(),
                 action: "STATUS".into(),
                 detail: "Rustacean [completed]: 100% — Code review done, 2 findings".into(),
-                is_urgent: false, requires_human: false, raw_json: String::new(),
+                is_urgent: false,
+                requires_human: false,
+                raw_json: String::new(),
             });
         }
 
@@ -573,10 +619,13 @@ impl App {
         if self.demo_tick == 6 {
             self.tasks_assigned += 1;
             self.add_activity(ActivityItem {
-                timestamp: now_str(), actor: "Alice".into(),
+                timestamp: now_str(),
+                actor: "Alice".into(),
                 action: "TASK_ASSIGNED".into(),
                 detail: "Alice assigned \"human-review\" to Bridge".into(),
-                is_urgent: false, requires_human: false, raw_json: String::new(),
+                is_urgent: false,
+                requires_human: false,
+                raw_json: String::new(),
             });
         }
     }
@@ -591,7 +640,7 @@ fn draw(f: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),  // Status bar
+            Constraint::Length(3), // Status bar
             Constraint::Min(5),    // Main content
             Constraint::Length(1), // Help bar
         ])
@@ -621,13 +670,21 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
     );
 
     let line = Line::from(vec![
-        Span::styled(title, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            title,
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(stats, Style::default().fg(Color::DarkGray)),
-        Span::styled(alerts, if app.pending_approvals > 0 {
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::DarkGray)
-        }),
+        Span::styled(
+            alerts,
+            if app.pending_approvals > 0 {
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            },
+        ),
     ]);
 
     let bar = Paragraph::new(line)
@@ -642,7 +699,7 @@ fn draw_dashboard(f: &mut Frame, app: &App, area: Rect) {
         .direction(Direction::Horizontal)
         .constraints([
             Constraint::Length(28), // Agent panel
-            Constraint::Min(20),   // Activity feed
+            Constraint::Min(20),    // Activity feed
         ])
         .split(area);
 
@@ -653,38 +710,53 @@ fn draw_dashboard(f: &mut Frame, app: &App, area: Rect) {
 fn draw_agent_panel(f: &mut Frame, app: &App, area: Rect) {
     let title = format!(" Agents ({}) ", app.agents.len());
 
-    let mut items: Vec<ListItem> = app.agents.values().map(|agent| {
-        let status_icon = if agent.online { "🟢" } else { "⚫" };
-        let load_bar = format!("{:.0}%", agent.load * 100.0);
+    let mut items: Vec<ListItem> = app
+        .agents
+        .values()
+        .map(|agent| {
+            let status_icon = if agent.online { "🟢" } else { "⚫" };
+            let load_bar = format!("{:.0}%", agent.load * 100.0);
 
-        let line = Line::from(vec![
-            Span::styled(format!(" {} ", status_icon),
-                Style::default().fg(if agent.online { Color::Green } else { Color::DarkGray })),
-            Span::styled(&agent.display_name,
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-            Span::styled(format!(" {}", load_bar),
-                Style::default().fg(Color::Yellow)),
-        ]);
+            let line = Line::from(vec![
+                Span::styled(
+                    format!(" {} ", status_icon),
+                    Style::default().fg(if agent.online {
+                        Color::Green
+                    } else {
+                        Color::DarkGray
+                    }),
+                ),
+                Span::styled(
+                    &agent.display_name,
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(format!(" {}", load_bar), Style::default().fg(Color::Yellow)),
+            ]);
 
-        let detail = Line::from(Span::styled(
-            format!("    {} · {}", agent.capabilities.join(", "), agent.did),
-            Style::default().fg(Color::DarkGray),
-        ));
+            let detail = Line::from(Span::styled(
+                format!("    {} · {}", agent.capabilities.join(", "), agent.did),
+                Style::default().fg(Color::DarkGray),
+            ));
 
-        ListItem::new(vec![line, detail])
-    }).collect();
+            ListItem::new(vec![line, detail])
+        })
+        .collect();
 
     if items.is_empty() {
-        items.push(ListItem::new(Line::from(
-            Span::styled("  No agents connected", Style::default().fg(Color::DarkGray)),
-        )));
+        items.push(ListItem::new(Line::from(Span::styled(
+            "  No agents connected",
+            Style::default().fg(Color::DarkGray),
+        ))));
     }
 
-    let list = List::new(items)
-        .block(Block::default()
+    let list = List::new(items).block(
+        Block::default()
             .title(title)
             .borders(Borders::ALL)
-            .style(Style::default().bg(Color::Black)));
+            .style(Style::default().bg(Color::Black)),
+    );
 
     f.render_widget(list, area);
 }
@@ -692,45 +764,54 @@ fn draw_agent_panel(f: &mut Frame, app: &App, area: Rect) {
 fn draw_activity_feed(f: &mut Frame, app: &App, area: Rect) {
     let title = format!(" Activity Feed ({}) ", app.activities.len());
 
-    let items: Vec<ListItem> = app.activities.iter().rev().map(|item| {
-        let (icon_color, icon) = match item.action.as_str() {
-            "HUMAN_ESCALATION" => (Color::Red, "🚨"),
-            "TASK_ASSIGNED" => (Color::Yellow, "📋"),
-            "STATUS" => (Color::Blue, "📊"),
-            "TEXT" => (Color::White, "💬"),
-            "DATA" => (Color::Green, "📦"),
-            "HEARTBEAT" => (Color::DarkGray, "💚"),
-            "APPROVED" => (Color::Green, "✅"),
-            "REJECTED" => (Color::Red, "❌"),
-            "IDENTITY_VERIFIED" => (Color::Cyan, "🪪"),
-            "E2EE_SESSION" => (Color::Magenta, "🔒"),
-            "CONNECTED" => (Color::Green, "🔗"),
-            "OFFLINE" => (Color::DarkGray, "❌"),
-            "INTENT" => (Color::Blue, "🤝"),
-            _ => (Color::White, "  "),
-        };
+    let items: Vec<ListItem> = app
+        .activities
+        .iter()
+        .rev()
+        .map(|item| {
+            let (icon_color, icon) = match item.action.as_str() {
+                "HUMAN_ESCALATION" => (Color::Red, "🚨"),
+                "TASK_ASSIGNED" => (Color::Yellow, "📋"),
+                "STATUS" => (Color::Blue, "📊"),
+                "TEXT" => (Color::White, "💬"),
+                "DATA" => (Color::Green, "📦"),
+                "HEARTBEAT" => (Color::DarkGray, "💚"),
+                "APPROVED" => (Color::Green, "✅"),
+                "REJECTED" => (Color::Red, "❌"),
+                "IDENTITY_VERIFIED" => (Color::Cyan, "🪪"),
+                "E2EE_SESSION" => (Color::Magenta, "🔒"),
+                "CONNECTED" => (Color::Green, "🔗"),
+                "OFFLINE" => (Color::DarkGray, "❌"),
+                "INTENT" => (Color::Blue, "🤝"),
+                _ => (Color::White, "  "),
+            };
 
-        let lines = vec![
-            Line::from(vec![
-                Span::styled(format!(" {} ", icon), Style::default().fg(icon_color)),
-                Span::styled(&item.timestamp, Style::default().fg(Color::DarkGray)),
-                Span::styled(format!(" {} ", &item.actor),
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            ]),
-            Line::from(Span::styled(
-                format!("   {}", &item.detail),
-                if item.requires_human {
-                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
-                } else if item.is_urgent {
-                    Style::default().fg(Color::Yellow)
-                } else {
-                    Style::default().fg(Color::Gray)
-                },
-            )),
-        ];
+            let lines = vec![
+                Line::from(vec![
+                    Span::styled(format!(" {} ", icon), Style::default().fg(icon_color)),
+                    Span::styled(&item.timestamp, Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        format!(" {} ", &item.actor),
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]),
+                Line::from(Span::styled(
+                    format!("   {}", &item.detail),
+                    if item.requires_human {
+                        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+                    } else if item.is_urgent {
+                        Style::default().fg(Color::Yellow)
+                    } else {
+                        Style::default().fg(Color::Gray)
+                    },
+                )),
+            ];
 
-        ListItem::new(lines)
-    }).collect();
+            ListItem::new(lines)
+        })
+        .collect();
 
     if items.is_empty() {
         let placeholder = ListItem::new(vec![
@@ -748,11 +829,12 @@ fn draw_activity_feed(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    let list = List::new(items)
-        .block(Block::default()
+    let list = List::new(items).block(
+        Block::default()
             .title(title)
             .borders(Borders::ALL)
-            .style(Style::default().bg(Color::Black)));
+            .style(Style::default().bg(Color::Black)),
+    );
 
     f.render_widget(list, area);
 }
@@ -762,7 +844,7 @@ fn draw_alert_detail(f: &mut Frame, app: &App, area: Rect) {
         .direction(Direction::Horizontal)
         .constraints([
             Constraint::Length(28), // Alert list
-            Constraint::Min(30),   // Alert detail
+            Constraint::Min(30),    // Alert detail
         ])
         .split(area);
 
@@ -771,35 +853,49 @@ fn draw_alert_detail(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_alert_list(f: &mut Frame, app: &App, area: Rect) {
-    let pending = app.alerts.iter().filter(|a| a.status == AlertStatus::Pending).count();
+    let pending = app
+        .alerts
+        .iter()
+        .filter(|a| a.status == AlertStatus::Pending)
+        .count();
     let title = format!(" Alerts ({} pending) ", pending);
 
-    let items: Vec<ListItem> = app.alerts.iter().map(|alert| {
-        let (icon, style) = match alert.status {
-            AlertStatus::Pending => ("🚨", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
-            AlertStatus::Approved => ("✅", Style::default().fg(Color::Green)),
-            AlertStatus::Rejected => ("❌", Style::default().fg(Color::Red)),
-            AlertStatus::Dismissed => ("⬜", Style::default().fg(Color::DarkGray)),
-        };
+    let items: Vec<ListItem> = app
+        .alerts
+        .iter()
+        .map(|alert| {
+            let (icon, style) = match alert.status {
+                AlertStatus::Pending => (
+                    "🚨",
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                ),
+                AlertStatus::Approved => ("✅", Style::default().fg(Color::Green)),
+                AlertStatus::Rejected => ("❌", Style::default().fg(Color::Red)),
+                AlertStatus::Dismissed => ("⬜", Style::default().fg(Color::DarkGray)),
+            };
 
-        let lines = vec![
-            Line::from(vec![
-                Span::styled(format!(" {} ", icon), style),
-                Span::styled(&alert.from_agent,
-                    Style::default().fg(Color::Cyan)),
-            ]),
-            Line::from(Span::styled(
-                format!("   {}", &alert.summary),
-                Style::default().fg(Color::Gray),
-            )),
-        ];
+            let lines = vec![
+                Line::from(vec![
+                    Span::styled(format!(" {} ", icon), style),
+                    Span::styled(&alert.from_agent, Style::default().fg(Color::Cyan)),
+                ]),
+                Line::from(Span::styled(
+                    format!("   {}", &alert.summary),
+                    Style::default().fg(Color::Gray),
+                )),
+            ];
 
-        ListItem::new(lines)
-    }).collect();
+            ListItem::new(lines)
+        })
+        .collect();
 
     let list = List::new(items)
         .block(Block::default().title(title).borders(Borders::ALL))
-        .highlight_style(Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD));
+        .highlight_style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        );
 
     f.render_stateful_widget(list, area, &mut app.alert_list_state.clone());
 }
@@ -810,7 +906,11 @@ fn draw_alert_view(f: &mut Frame, app: &App, area: Rect) {
     if selected >= app.alerts.len() {
         let placeholder = Paragraph::new("  No alert selected")
             .style(Style::default().fg(Color::DarkGray))
-            .block(Block::default().title(" Alert Detail ").borders(Borders::ALL));
+            .block(
+                Block::default()
+                    .title(" Alert Detail ")
+                    .borders(Borders::ALL),
+            );
         f.render_widget(placeholder, area);
         return;
     }
@@ -835,20 +935,25 @@ fn draw_alert_view(f: &mut Frame, app: &App, area: Rect) {
     // Split area: detail (top) + actions (bottom)
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(5),
-            Constraint::Length(3),
-        ])
+        .constraints([Constraint::Min(5), Constraint::Length(3)])
         .split(area);
 
     // Detail panel
     let detail_text = vec![
         Line::from(vec![
             Span::styled("  From: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(&alert.from_agent,
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            Span::styled(format!("  │  {}", status_str),
-                Style::default().fg(status_color).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                &alert.from_agent,
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("  │  {}", status_str),
+                Style::default()
+                    .fg(status_color)
+                    .add_modifier(Modifier::BOLD),
+            ),
         ]),
         Line::from(vec![
             Span::styled("  Reason: ", Style::default().fg(Color::DarkGray)),
@@ -859,7 +964,10 @@ fn draw_alert_view(f: &mut Frame, app: &App, area: Rect) {
             Span::styled(&alert.summary, Style::default().fg(Color::White)),
         ]),
         Line::from(""),
-        Line::from(Span::styled("  Context:", Style::default().fg(Color::DarkGray))),
+        Line::from(Span::styled(
+            "  Context:",
+            Style::default().fg(Color::DarkGray),
+        )),
         Line::from(Span::styled(
             format!("  {}", alert.context.replace('\n', "\n  ")),
             Style::default().fg(Color::Gray),
@@ -872,9 +980,11 @@ fn draw_alert_view(f: &mut Frame, app: &App, area: Rect) {
     ];
 
     let detail = Paragraph::new(detail_text)
-        .block(Block::default()
-            .title(format!(" Alert #{} ", alert.id))
-            .borders(Borders::ALL))
+        .block(
+            Block::default()
+                .title(format!(" Alert #{} ", alert.id))
+                .borders(Borders::ALL),
+        )
         .wrap(Wrap { trim: true });
 
     f.render_widget(detail, chunks[0]);
@@ -893,8 +1003,16 @@ fn draw_alert_view(f: &mut Frame, app: &App, area: Rect) {
         Span::styled(" [X] Dismiss ", action_style),
         Span::styled(" [↑↓] Navigate ", Style::default().fg(Color::DarkGray)),
     ]))
-    .block(Block::default().title(" Human Intervention ").borders(Borders::ALL))
-    .style(Style::default().bg(if is_pending { Color::DarkGray } else { Color::Black }));
+    .block(
+        Block::default()
+            .title(" Human Intervention ")
+            .borders(Borders::ALL),
+    )
+    .style(Style::default().bg(if is_pending {
+        Color::DarkGray
+    } else {
+        Color::Black
+    }));
 
     f.render_widget(actions, chunks[1]);
 }
@@ -902,7 +1020,9 @@ fn draw_alert_view(f: &mut Frame, app: &App, area: Rect) {
 fn draw_help_bar(f: &mut Frame, app: &App, area: Rect) {
     let help = match app.mode {
         AppMode::Dashboard => " [D] Dashboard  [A] Alerts  [Q] Quit ",
-        AppMode::AlertDetail => " [Y] Approve  [N] Reject  [X] Dismiss  [↑↓] Navigate  [D] Back  [Q] Quit ",
+        AppMode::AlertDetail => {
+            " [Y] Approve  [N] Reject  [X] Dismiss  [↑↓] Navigate  [D] Back  [Q] Quit "
+        }
     };
 
     let bar = Paragraph::new(Line::from(Span::styled(
@@ -923,7 +1043,12 @@ fn now_str() -> String {
         .unwrap_or_default()
         .as_secs();
     let secs = (now % 86400) as u32;
-    format!("{:02}:{:02}:{:02}", secs / 3600, (secs % 3600) / 60, secs % 60)
+    format!(
+        "{:02}:{:02}:{:02}",
+        secs / 3600,
+        (secs % 3600) / 60,
+        secs % 60
+    )
 }
 
 // ─── Main ──────────────────────────────────────────────────────

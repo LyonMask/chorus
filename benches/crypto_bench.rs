@@ -4,8 +4,8 @@
 //!
 //! Run: cargo bench --bench crypto_bench
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use chorus_core::crypto::{CryptoLayer, KeyPair};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 
 fn make_keypair() -> KeyPair {
     let crypto = CryptoLayer::new();
@@ -15,8 +15,7 @@ fn make_keypair() -> KeyPair {
 fn make_session(crypto: &mut CryptoLayer) {
     let alice = make_keypair();
     let bob = make_keypair();
-    let shared =
-        CryptoLayer::diffie_hellman(&alice.private, &bob.public).expect("dh failed");
+    let shared = CryptoLayer::diffie_hellman(&alice.private, &bob.public).expect("dh failed");
     crypto.create_session("bench-peer", &shared);
 }
 
@@ -31,11 +30,7 @@ fn bench_diffie_hellman(c: &mut Criterion) {
     c.bench_function("crypto/dh_exchange", |b| {
         let alice = make_keypair();
         let bob = make_keypair();
-        b.iter(|| {
-            black_box(
-                CryptoLayer::diffie_hellman(&alice.private, &bob.public).unwrap(),
-            )
-        })
+        b.iter(|| black_box(CryptoLayer::diffie_hellman(&alice.private, &bob.public).unwrap()))
     });
 }
 
@@ -45,8 +40,7 @@ fn bench_session_creation(c: &mut Criterion) {
             || {
                 let alice = make_keypair();
                 let bob = make_keypair();
-                let shared =
-                    CryptoLayer::diffie_hellman(&alice.private, &bob.public).unwrap();
+                let shared = CryptoLayer::diffie_hellman(&alice.private, &bob.public).unwrap();
                 (CryptoLayer::new(), shared)
             },
             |(mut crypto, shared)| {

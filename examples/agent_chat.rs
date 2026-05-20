@@ -18,8 +18,8 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Mutex;
 use tokio::io::AsyncBufReadExt;
+use tokio::sync::Mutex;
 
 use chorus_core::identity::{AgentIdentity, IdentityBuilder};
 use chorus_core::p2p::{P2PConfig, P2PEvent, P2PNetwork};
@@ -49,13 +49,19 @@ impl Agent {
     }
 
     async fn send_to(&self, peer_id: &libp2p::PeerId, msg: &AgentMessage) -> anyhow::Result<()> {
-        self.network.send_encrypted(*peer_id, msg.to_json_bytes()?).await
+        self.network
+            .send_encrypted(*peer_id, msg.to_json_bytes()?)
+            .await
     }
 }
 
 // ─── Create Agent ───────────────────────────────────────────────
 
-async fn create_agent(name: &str, capabilities: &[&str], role: &str) -> Result<(Agent, tokio::sync::mpsc::UnboundedReceiver<P2PEvent>), Box<dyn Error>> {
+async fn create_agent(
+    name: &str,
+    capabilities: &[&str],
+    role: &str,
+) -> Result<(Agent, tokio::sync::mpsc::UnboundedReceiver<P2PEvent>), Box<dyn Error>> {
     let (identity, _signing_key) = IdentityBuilder::new(name)
         .capabilities(capabilities)
         .version("chorus-core/0.1.0-alpha")
@@ -69,12 +75,15 @@ async fn create_agent(name: &str, capabilities: &[&str], role: &str) -> Result<(
 
     let (network, event_rx) = P2PNetwork::new(config)?;
 
-    Ok((Agent {
-        identity,
-        network,
-        known_agents: Arc::new(Mutex::new(HashMap::new())),
-        role: role.to_string(),
-    }, event_rx))
+    Ok((
+        Agent {
+            identity,
+            network,
+            known_agents: Arc::new(Mutex::new(HashMap::new())),
+            role: role.to_string(),
+        },
+        event_rx,
+    ))
 }
 
 // ─── Human-Readable Formatter ───────────────────────────────────
@@ -82,13 +91,20 @@ async fn create_agent(name: &str, capabilities: &[&str], role: &str) -> Result<(
 fn format_message(msg: &AgentMessage) -> String {
     let from = &msg.from_agent.display_name;
     let short_from = &msg.from_agent.short_id();
-    let to = if msg.to_agent.is_empty() { "ALL" } else { &msg.to_agent };
+    let to = if msg.to_agent.is_empty() {
+        "ALL"
+    } else {
+        &msg.to_agent
+    };
 
     match msg.protocol {
         MessageProtocol::Heartbeat => {
             let status = msg.payload_str("status").unwrap_or("?");
             let load = msg.payload_str("load").unwrap_or("?");
-            format!("  💚 [{}] heartbeat: {} (load {})", short_from, status, load)
+            format!(
+                "  💚 [{}] heartbeat: {} (load {})",
+                short_from, status, load
+            )
         }
         MessageProtocol::TaskAssignment => {
             let task = msg.payload_str("task").unwrap_or("?");
@@ -165,9 +181,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
 async fn run_demo() -> Result<(), Box<dyn Error>> {
     // Minimal logging for demo
-    tracing_subscriber::fmt()
-        .with_env_filter("warn")
-        .init();
+    tracing_subscriber::fmt().with_env_filter("warn").init();
 
     header("🤖 Chorus — 3-Agent Collaboration Demo");
     println!("  Layer 0: P2P + E2EE (libp2p + X25519 + ChaCha20)");
@@ -178,9 +192,16 @@ async fn run_demo() -> Result<(), Box<dyn Error>> {
     // Create 3 agents
     println!("[SETUP] Creating 3 agents...");
 
-    let (alice, mut alice_rx) = create_agent("Alice", &["coordinate", "strategy"], "Coordinator").await?;
-    let (rustacean, _rustacean_rx) = create_agent("Rustacean", &["code-review", "crypto", "p2p"], "Worker").await?;
-    let (bridge, _bridge_rx) = create_agent("Bridge", &["product", "review", "human-handoff"], "Reviewer").await?;
+    let (alice, mut alice_rx) =
+        create_agent("Alice", &["coordinate", "strategy"], "Coordinator").await?;
+    let (rustacean, _rustacean_rx) =
+        create_agent("Rustacean", &["code-review", "crypto", "p2p"], "Worker").await?;
+    let (bridge, _bridge_rx) = create_agent(
+        "Bridge",
+        &["product", "review", "human-handoff"],
+        "Reviewer",
+    )
+    .await?;
 
     println!();
     println!("  Alice (Coordinator)     did:{}", alice.short_id());
@@ -423,8 +444,7 @@ async fn run_demo() -> Result<(), Box<dyn Error>> {
 async fn run_interactive(name: &str, peers: &[String]) -> Result<(), Box<dyn Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
 

@@ -2,8 +2,8 @@
 //!
 //! Usage: cargo run --example headless_sender -- <multiaddr> <message1> <message2> ...
 
-use std::sync::Arc;
 use chorus_core::p2p::{P2PConfig, P2PEvent, P2PNetwork};
+use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -97,7 +97,16 @@ async fn main() -> anyhow::Result<()> {
 
 fn chrono_now() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
-    let ms = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
+    let ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
     let s = ms / 1000;
-    format!("{:02}:{:02}:{:02}.{:03}", (s / 3600) % 24, (s / 60) % 60, s % 60, ms % 1000)
+    format!(
+        "{:02}:{:02}:{:02}.{:03}",
+        (s / 3600) % 24,
+        (s / 60) % 60,
+        s % 60,
+        ms % 1000
+    )
 }

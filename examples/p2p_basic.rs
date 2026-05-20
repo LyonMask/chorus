@@ -150,8 +150,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
             P2PEvent::SessionFailed { peer_id, reason } => {
                 println!("❌ Session fail {peer_id}: {reason}");
             }
-            P2PEvent::AgentIdentified { peer_id: _, identity } => {
-                println!("🪪 Agent: {} ({})", identity.display_name, identity.short_id());
+            P2PEvent::AgentIdentified {
+                peer_id: _,
+                identity,
+            } => {
+                println!(
+                    "🪪 Agent: {} ({})",
+                    identity.display_name,
+                    identity.short_id()
+                );
             }
             P2PEvent::IdentityVerificationFailed { peer_id, reason } => {
                 println!("❌ Identity fail {peer_id}: {reason}");
@@ -167,7 +174,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
             P2PEvent::PingFailure { peer_id, error } => {
                 println!("🏓 Ping FAIL {peer_id}: {error}");
             }
-            P2PEvent::DirectMessage { from, request_id, payload } => {
+            P2PEvent::DirectMessage {
+                from,
+                request_id,
+                payload,
+            } => {
                 println!("📨 Direct #{} from {}: {:?}", request_id, from, payload);
             }
             P2PEvent::DirectSendFailed { peer_id, reason } => {
@@ -179,7 +190,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
             P2PEvent::PendingMessagesSent { peer_id, count } => {
                 println!("📤 Flush {} pending to {}", count, peer_id);
             }
-            P2PEvent::ResourceDeclared { peer_id, advertisement } => {
+            P2PEvent::ResourceDeclared {
+                peer_id,
+                advertisement,
+            } => {
                 println!(
                     "📦 Resource from {peer_id}: agent={}, cpu={:.1}%, mem={}MB",
                     advertisement.agent_id,
@@ -190,7 +204,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
             P2PEvent::ResourceDeclarationRejected { peer_id, reason } => {
                 println!("❌ Resource rejected from {peer_id}: {reason}");
             }
-            P2PEvent::ResourceOfferSent { peer_id, session_id } => {
+            P2PEvent::ResourceOfferSent {
+                peer_id,
+                session_id,
+            } => {
                 println!("📦 Offer sent to {peer_id}: session={session_id}");
             }
             P2PEvent::ResourceOfferReceived { peer_id, offer } => {
@@ -199,10 +216,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     offer.cpu_amount, offer.memory_amount_mb
                 );
             }
-            P2PEvent::ResourceSessionStarted { peer_id, session_id, expires_at } => {
+            P2PEvent::ResourceSessionStarted {
+                peer_id,
+                session_id,
+                expires_at,
+            } => {
                 println!("✅ Session started with {peer_id}: session={session_id}, expires_at={expires_at}");
             }
-            P2PEvent::ResourceReleased { peer_id, session_id, contribution_delta } => {
+            P2PEvent::ResourceReleased {
+                peer_id,
+                session_id,
+                contribution_delta,
+            } => {
                 println!(
                     "👋 Session released {peer_id}: session={session_id}, delta={contribution_delta:.4}"
                 );

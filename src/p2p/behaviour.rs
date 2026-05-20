@@ -1,6 +1,8 @@
 //! Composite libp2p network behaviour.
 
-use libp2p::{dcutr, gossipsub, identify, mdns, ping, relay, request_response, swarm::NetworkBehaviour};
+use libp2p::{
+    dcutr, gossipsub, identify, mdns, ping, relay, request_response, swarm::NetworkBehaviour,
+};
 
 use super::direct::DirectCodec;
 

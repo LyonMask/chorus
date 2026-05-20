@@ -7,11 +7,11 @@
 //! 4. Multiple encrypted messages
 //! 5. Connection lifecycle events
 
-use std::time::Duration;
-use tokio::sync::mpsc;
 use chorus_core::identity::{AgentIdentity, IdentityBuilder};
 use chorus_core::p2p::{P2PConfig, P2PEvent, P2PNetwork};
 use chorus_core::protocol::{AgentMessage, MessageProtocol};
+use std::time::Duration;
+use tokio::sync::mpsc;
 
 /// Helper: create a P2PConfig for testing with a specific listen port.
 fn test_config(port: u16) -> P2PConfig {
@@ -51,13 +51,23 @@ async fn spawn_pair(
     let (net_b, mut ev_b) = P2PNetwork::new(test_config(port_b)).expect("node_b");
 
     // Collect listen addresses from events
-    let addr_a = wait_for_event(&mut ev_a, |e| matches!(e, P2PEvent::Listening { .. }), Duration::from_secs(3)).await;
+    let addr_a = wait_for_event(
+        &mut ev_a,
+        |e| matches!(e, P2PEvent::Listening { .. }),
+        Duration::from_secs(3),
+    )
+    .await;
     let addr_a_str = match addr_a {
         P2PEvent::Listening { address } => address.to_string(),
         _ => panic!("expected Listening event"),
     };
 
-    let addr_b = wait_for_event(&mut ev_b, |e| matches!(e, P2PEvent::Listening { .. }), Duration::from_secs(3)).await;
+    let addr_b = wait_for_event(
+        &mut ev_b,
+        |e| matches!(e, P2PEvent::Listening { .. }),
+        Duration::from_secs(3),
+    )
+    .await;
     let addr_b_str = match addr_b {
         P2PEvent::Listening { address } => address.to_string(),
         _ => panic!("expected Listening event"),
@@ -70,8 +80,7 @@ async fn spawn_pair(
 
 #[tokio::test]
 async fn test_two_nodes_connect_and_exchange_keys() {
-    let (net_a, mut ev_a, addr_a, net_b, mut ev_b, addr_b) =
-        spawn_pair(0, 0).await;
+    let (net_a, mut ev_a, addr_a, net_b, mut ev_b, addr_b) = spawn_pair(0, 0).await;
 
     tracing::info!("node_a listening on {}", addr_a);
     tracing::info!("node_b listening on {}", addr_b);
@@ -95,8 +104,7 @@ async fn test_two_nodes_connect_and_exchange_keys() {
 
 #[tokio::test]
 async fn test_encrypted_message_roundtrip() {
-    let (net_a, mut ev_a, _addr_a, net_b, mut ev_b, addr_b) =
-        spawn_pair(0, 0).await;
+    let (net_a, mut ev_a, _addr_a, net_b, mut ev_b, addr_b) = spawn_pair(0, 0).await;
 
     // A dials B
     net_a.dial(&addr_b).await.expect("dial");
@@ -105,12 +113,23 @@ async fn test_encrypted_message_roundtrip() {
     let peer_b_id = *net_b.local_peer_id();
     let plaintext = b"hello from node_a".to_vec();
 
-    net_a.send_encrypted(peer_b_id, plaintext.clone()).await.expect("send_encrypted");
+    net_a
+        .send_encrypted(peer_b_id, plaintext.clone())
+        .await
+        .expect("send_encrypted");
 
     // B should receive the decrypted message
-    let msg = wait_for_event(&mut ev_b, |e| matches!(e, P2PEvent::EncryptedMessage { .. }), Duration::from_secs(8)).await;
+    let msg = wait_for_event(
+        &mut ev_b,
+        |e| matches!(e, P2PEvent::EncryptedMessage { .. }),
+        Duration::from_secs(8),
+    )
+    .await;
     match msg {
-        P2PEvent::EncryptedMessage { plaintext: received, .. } => {
+        P2PEvent::EncryptedMessage {
+            plaintext: received,
+            ..
+        } => {
             assert_eq!(received, plaintext);
         }
         _ => panic!("expected EncryptedMessage, got {:?}", msg),
@@ -124,8 +143,7 @@ async fn test_encrypted_message_roundtrip() {
 
 #[tokio::test]
 async fn test_structured_message_roundtrip() {
-    let (net_a, mut ev_a, _addr_a, net_b, mut ev_b, addr_b) =
-        spawn_pair(0, 0).await;
+    let (net_a, mut ev_a, _addr_a, net_b, mut ev_b, addr_b) = spawn_pair(0, 0).await;
 
     net_a.dial(&addr_b).await.expect("dial");
     wait_for_session(&mut ev_a, &mut ev_b, Duration::from_secs(8)).await;
@@ -140,9 +158,17 @@ async fn test_structured_message_roundtrip() {
     );
 
     let msg_bytes = msg.to_json_bytes().expect("serialize msg");
-    net_a.send_encrypted(peer_b_id, msg_bytes).await.expect("send");
+    net_a
+        .send_encrypted(peer_b_id, msg_bytes)
+        .await
+        .expect("send");
 
-    let event = wait_for_event(&mut ev_b, |e| matches!(e, P2PEvent::StructuredMessage { .. }), Duration::from_secs(8)).await;
+    let event = wait_for_event(
+        &mut ev_b,
+        |e| matches!(e, P2PEvent::StructuredMessage { .. }),
+        Duration::from_secs(8),
+    )
+    .await;
     match event {
         P2PEvent::StructuredMessage { message, .. } => {
             assert_eq!(message.protocol.tag(), "TASK");
@@ -159,8 +185,7 @@ async fn test_structured_message_roundtrip() {
 
 #[tokio::test]
 async fn test_multiple_encrypted_messages() {
-    let (net_a, mut ev_a, _addr_a, net_b, mut ev_b, addr_b) =
-        spawn_pair(0, 0).await;
+    let (net_a, mut ev_a, _addr_a, net_b, mut ev_b, addr_b) = spawn_pair(0, 0).await;
 
     net_a.dial(&addr_b).await.expect("dial");
     wait_for_session(&mut ev_a, &mut ev_b, Duration::from_secs(8)).await;
@@ -194,17 +219,26 @@ async fn test_multiple_encrypted_messages() {
 
 #[tokio::test]
 async fn test_connection_lifecycle_events() {
-    let (net_a, mut ev_a, _addr_a, net_b, _ev_b, addr_b) =
-        spawn_pair(0, 0).await;
+    let (net_a, mut ev_a, _addr_a, net_b, _ev_b, addr_b) = spawn_pair(0, 0).await;
 
     net_a.dial(&addr_b).await.expect("dial");
 
     // Should see PeerConnected
-    let event = wait_for_event(&mut ev_a, |e| matches!(e, P2PEvent::PeerConnected { .. }), Duration::from_secs(8)).await;
+    let event = wait_for_event(
+        &mut ev_a,
+        |e| matches!(e, P2PEvent::PeerConnected { .. }),
+        Duration::from_secs(8),
+    )
+    .await;
     assert!(matches!(event, P2PEvent::PeerConnected { .. }));
 
     // Should see SessionEstablished
-    let event = wait_for_event(&mut ev_a, |e| matches!(e, P2PEvent::SessionEstablished { .. }), Duration::from_secs(8)).await;
+    let event = wait_for_event(
+        &mut ev_a,
+        |e| matches!(e, P2PEvent::SessionEstablished { .. }),
+        Duration::from_secs(8),
+    )
+    .await;
     assert!(matches!(event, P2PEvent::SessionEstablished { .. }));
 
     // list_peers should include B
@@ -219,8 +253,7 @@ async fn test_connection_lifecycle_events() {
 
 #[tokio::test]
 async fn test_broadcast_via_gossipsub() {
-    let (net_a, mut ev_a, _addr_a, net_b, mut ev_b, addr_b) =
-        spawn_pair(0, 0).await;
+    let (net_a, mut ev_a, _addr_a, net_b, mut ev_b, addr_b) = spawn_pair(0, 0).await;
 
     net_a.dial(&addr_b).await.expect("dial");
     wait_for_session(&mut ev_a, &mut ev_b, Duration::from_secs(8)).await;
@@ -230,7 +263,12 @@ async fn test_broadcast_via_gossipsub() {
     net_a.broadcast(data.clone()).await.expect("broadcast");
 
     // B should receive as RawMessage (not encrypted)
-    let event = wait_for_event(&mut ev_b, |e| matches!(e, P2PEvent::RawMessage { .. }), Duration::from_secs(8)).await;
+    let event = wait_for_event(
+        &mut ev_b,
+        |e| matches!(e, P2PEvent::RawMessage { .. }),
+        Duration::from_secs(8),
+    )
+    .await;
     match event {
         P2PEvent::RawMessage { data: received, .. } => {
             assert_eq!(received, data);

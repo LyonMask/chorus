@@ -8,9 +8,9 @@
 //! Wire exchange happens via a dedicated Gossipsub topic
 //! (`/chorus/identity/1.0.0`) after the E2EE session is established.
 
-use ed25519_dalek::{SigningKey, VerifyingKey, Signer, Verifier, Signature};
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use rand::rngs::OsRng;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 // ─── DID Format ──────────────────────────────────────────────────
@@ -81,7 +81,7 @@ pub struct AgentIdentity {
 
 pub mod bytes_base64 {
     use base64::Engine;
-    use serde::{self, Deserialize, Serializer, Deserializer};
+    use serde::{self, Deserialize, Deserializer, Serializer};
 
     pub fn serialize<S: Serializer>(data: &Vec<u8>, s: S) -> Result<S::Ok, S::Error> {
         let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(data);
@@ -138,8 +138,7 @@ impl AgentIdentity {
             version: &self.version,
             created_at: self.created_at,
         };
-        serde_json::to_vec(&payload)
-            .map_err(|e| IdentityError::Serialization(e.to_string()))
+        serde_json::to_vec(&payload).map_err(|e| IdentityError::Serialization(e.to_string()))
     }
 
     /// Verify that the identity is self-signed and the public key matches the agent_id.
@@ -154,18 +153,25 @@ impl AgentIdentity {
         let payload = self.signing_payload()?;
 
         // 3. Verify Ed25519 signature
-        let pubkey_bytes: [u8; 32] = self.public_key.clone().try_into()
+        let pubkey_bytes: [u8; 32] = self
+            .public_key
+            .clone()
+            .try_into()
             .map_err(|_| IdentityError::InvalidDID("public_key must be 32 bytes".into()))?;
 
         let verifying_key = VerifyingKey::from_bytes(&pubkey_bytes)
             .map_err(|_| IdentityError::InvalidDID("invalid Ed25519 public key".into()))?;
 
-        let signature_bytes: [u8; 64] = self.signature.clone().try_into()
+        let signature_bytes: [u8; 64] = self
+            .signature
+            .clone()
+            .try_into()
             .map_err(|_| IdentityError::InvalidSignature)?;
 
         let signature = Signature::from_bytes(&signature_bytes);
 
-        verifying_key.verify(&payload, &signature)
+        verifying_key
+            .verify(&payload, &signature)
             .map_err(|_| IdentityError::InvalidSignature)?;
 
         Ok(())
@@ -173,7 +179,9 @@ impl AgentIdentity {
 
     /// Check if this agent declares a specific capability.
     pub fn has_capability(&self, cap: &str) -> bool {
-        self.capabilities.iter().any(|c| c.eq_ignore_ascii_case(cap))
+        self.capabilities
+            .iter()
+            .any(|c| c.eq_ignore_ascii_case(cap))
     }
 
     /// A short display string for logging.
@@ -344,7 +352,8 @@ impl IdentityRegistry {
             trust_level: 0,
         };
         self.peer_to_did.insert(peer_id.to_string(), binding);
-        self.did_to_peer.insert(did.to_string(), peer_id.to_string());
+        self.did_to_peer
+            .insert(did.to_string(), peer_id.to_string());
     }
 
     /// Look up DID by peer_id.
@@ -490,9 +499,7 @@ mod tests {
 
     #[test]
     fn test_tampered_display_name_fails() {
-        let (mut identity, _) = IdentityBuilder::new("Honest")
-            .build()
-            .unwrap();
+        let (mut identity, _) = IdentityBuilder::new("Honest").build().unwrap();
 
         identity.display_name = "Impostor".to_string();
         assert!(identity.verify().is_err());
@@ -511,9 +518,7 @@ mod tests {
 
     #[test]
     fn test_tampered_public_key_fails() {
-        let (mut identity, _) = IdentityBuilder::new("Agent")
-            .build()
-            .unwrap();
+        let (mut identity, _) = IdentityBuilder::new("Agent").build().unwrap();
 
         identity.public_key[0] ^= 0xFF;
         assert!(matches!(
@@ -524,9 +529,7 @@ mod tests {
 
     #[test]
     fn test_tampered_signature_fails() {
-        let (mut identity, _) = IdentityBuilder::new("Agent")
-            .build()
-            .unwrap();
+        let (mut identity, _) = IdentityBuilder::new("Agent").build().unwrap();
 
         identity.signature[10] ^= 0xFF;
         assert!(matches!(
@@ -572,9 +575,7 @@ mod tests {
 
     #[test]
     fn test_identity_envelope_roundtrip() {
-        let (identity, _) = IdentityBuilder::new("Agent")
-            .build()
-            .unwrap();
+        let (identity, _) = IdentityBuilder::new("Agent").build().unwrap();
 
         let envelope = IdentityEnvelope::new(identity, "12D3KooWTest");
         let json = serde_json::to_vec(&envelope).unwrap();
@@ -587,9 +588,7 @@ mod tests {
 
     #[test]
     fn test_short_id() {
-        let (identity, _) = IdentityBuilder::new("LongNameAgent")
-            .build()
-            .unwrap();
+        let (identity, _) = IdentityBuilder::new("LongNameAgent").build().unwrap();
         let short = identity.short_id();
         assert_eq!(short.len(), 24);
         assert!(short.starts_with("did:chorus:"));
@@ -597,9 +596,7 @@ mod tests {
 
     #[test]
     fn test_identity_without_owner() {
-        let (identity, _) = IdentityBuilder::new("Standalone")
-            .build()
-            .unwrap();
+        let (identity, _) = IdentityBuilder::new("Standalone").build().unwrap();
         assert!(identity.owner_id.is_empty());
         assert!(identity.verify().is_ok());
     }
@@ -613,16 +610,20 @@ mod tests {
             .build()
             .unwrap();
         identity.version = "0.99.0-tampered".to_string();
-        assert!(matches!(identity.verify(), Err(IdentityError::InvalidSignature)));
+        assert!(matches!(
+            identity.verify(),
+            Err(IdentityError::InvalidSignature)
+        ));
     }
 
     #[test]
     fn test_tampered_created_at_fails() {
-        let (mut identity, _) = IdentityBuilder::new("Agent")
-            .build()
-            .unwrap();
+        let (mut identity, _) = IdentityBuilder::new("Agent").build().unwrap();
         identity.created_at = 9999999999999;
-        assert!(matches!(identity.verify(), Err(IdentityError::InvalidSignature)));
+        assert!(matches!(
+            identity.verify(),
+            Err(IdentityError::InvalidSignature)
+        ));
     }
 
     #[test]
@@ -670,14 +671,10 @@ mod tests {
     #[test]
     fn test_identity_with_very_long_display_name() {
         let long_name = "A".repeat(10_000);
-        let (identity, _) = IdentityBuilder::new(&long_name)
-            .build()
-            .unwrap();
+        let (identity, _) = IdentityBuilder::new(&long_name).build().unwrap();
         assert_eq!(identity.display_name.len(), 10_000);
         assert!(identity.verify().is_ok());
     }
-
-    
 
     // ── IdentityRegistry Tests ──
 

@@ -131,11 +131,13 @@ impl SessionKey {
         }
 
         // CR-1.1: Extract salt and counter from nonce (salt[0..4] || counter[4..12]).
-        let incoming_salt: [u8; 4] = data[0..4].try_into()
+        let incoming_salt: [u8; 4] = data[0..4]
+            .try_into()
             .map_err(|_| Error::Decryption("Invalid nonce format".into()))?;
         let incoming_counter = u64::from_le_bytes(
-            data[4..NONCE_SIZE].try_into()
-                .map_err(|_| Error::Decryption("Invalid nonce format".into()))?
+            data[4..NONCE_SIZE]
+                .try_into()
+                .map_err(|_| Error::Decryption("Invalid nonce format".into()))?,
         );
 
         // When the sender's salt changes (new session), their counter resets to 0.
@@ -147,15 +149,17 @@ impl SessionKey {
 
         // Reject exact duplicate (replay). Allow any new counter (out-of-order OK).
         if self.seen_counters.contains(&incoming_counter) {
-            return Err(Error::Decryption(
-                format!("Replay detected: counter {} already seen", incoming_counter)
-            ));
+            return Err(Error::Decryption(format!(
+                "Replay detected: counter {} already seen",
+                incoming_counter
+            )));
         }
 
         let nonce = Nonce::from_slice(&data[..NONCE_SIZE]);
         let ciphertext = &data[NONCE_SIZE..];
 
-        let plaintext = self.cipher
+        let plaintext = self
+            .cipher
             .decrypt(nonce, ciphertext)
             .map_err(|_| Error::Decryption("Authentication failed".into()))?;
 
@@ -163,7 +167,10 @@ impl SessionKey {
         if self.seen_counters.len() >= SEEN_COUNTERS_CAPACITY {
             let target = SEEN_COUNTERS_CAPACITY / 2;
             let mut count = 0;
-            self.seen_counters.retain(|_| { count += 1; count > target });
+            self.seen_counters.retain(|_| {
+                count += 1;
+                count > target
+            });
         }
         self.seen_counters.insert(incoming_counter);
         Ok(plaintext)
@@ -370,8 +377,10 @@ mod tests {
         let mut bob = CryptoLayer::new();
         let alice_keys = alice.generate_keypair().unwrap();
         let bob_keys = bob.generate_keypair().unwrap();
-        let shared_a = CryptoLayer::diffie_hellman(alice_keys.private_key(), &bob_keys.public).unwrap();
-        let shared_b = CryptoLayer::diffie_hellman(bob_keys.private_key(), &alice_keys.public).unwrap();
+        let shared_a =
+            CryptoLayer::diffie_hellman(alice_keys.private_key(), &bob_keys.public).unwrap();
+        let shared_b =
+            CryptoLayer::diffie_hellman(bob_keys.private_key(), &alice_keys.public).unwrap();
         alice.create_session("bob", &shared_a);
         bob.create_session("alice", &shared_b);
 
@@ -400,7 +409,8 @@ mod tests {
         let bob = CryptoLayer::new();
         let alice_keys = alice.generate_keypair().unwrap();
         let bob_keys = bob.generate_keypair().unwrap();
-        let shared = CryptoLayer::diffie_hellman(alice_keys.private_key(), &bob_keys.public).unwrap();
+        let shared =
+            CryptoLayer::diffie_hellman(alice_keys.private_key(), &bob_keys.public).unwrap();
         alice.create_session("bob", &shared);
         assert!(alice.decrypt_from("eve", b"garbage").is_err());
     }
@@ -487,7 +497,8 @@ mod tests {
         let bob = CryptoLayer::new();
         let alice_keys = alice.generate_keypair().unwrap();
         let bob_keys = bob.generate_keypair().unwrap();
-        let shared = CryptoLayer::diffie_hellman(alice_keys.private_key(), &bob_keys.public).unwrap();
+        let shared =
+            CryptoLayer::diffie_hellman(alice_keys.private_key(), &bob_keys.public).unwrap();
         alice.create_session("bob", &shared);
         let session = alice.sessions.get_mut("bob").unwrap();
         session.counter = MAX_MESSAGES_PER_SESSION;
@@ -505,9 +516,13 @@ mod tests {
         let mut bob = CryptoLayer::new();
         let alice_keys = alice.generate_keypair().unwrap();
         let bob_keys = bob.generate_keypair().unwrap();
-        let shared = CryptoLayer::diffie_hellman(alice_keys.private_key(), &bob_keys.public).unwrap();
+        let shared =
+            CryptoLayer::diffie_hellman(alice_keys.private_key(), &bob_keys.public).unwrap();
         alice.create_session("bob", &shared);
-        bob.create_session("alice", &CryptoLayer::diffie_hellman(bob_keys.private_key(), &alice_keys.public).unwrap());
+        bob.create_session(
+            "alice",
+            &CryptoLayer::diffie_hellman(bob_keys.private_key(), &alice_keys.public).unwrap(),
+        );
         let enc = alice.encrypt_for("bob", b"before expiry").unwrap();
         let session = bob.sessions.get_mut("alice").unwrap();
         session.counter = MAX_MESSAGES_PER_SESSION;
@@ -549,8 +564,10 @@ mod tests {
         let mut bob = CryptoLayer::new();
         let alice_keys = alice.generate_keypair().unwrap();
         let bob_keys = bob.generate_keypair().unwrap();
-        let shared_a = CryptoLayer::diffie_hellman(alice_keys.private_key(), &bob_keys.public).unwrap();
-        let shared_b = CryptoLayer::diffie_hellman(bob_keys.private_key(), &alice_keys.public).unwrap();
+        let shared_a =
+            CryptoLayer::diffie_hellman(alice_keys.private_key(), &bob_keys.public).unwrap();
+        let shared_b =
+            CryptoLayer::diffie_hellman(bob_keys.private_key(), &alice_keys.public).unwrap();
         alice.create_session("bob", &shared_a);
         bob.create_session("alice", &shared_b);
 
@@ -572,8 +589,10 @@ mod tests {
         let mut bob = CryptoLayer::new();
         let alice_keys = alice.generate_keypair().unwrap();
         let bob_keys = bob.generate_keypair().unwrap();
-        let shared_a = CryptoLayer::diffie_hellman(alice_keys.private_key(), &bob_keys.public).unwrap();
-        let shared_b = CryptoLayer::diffie_hellman(bob_keys.private_key(), &alice_keys.public).unwrap();
+        let shared_a =
+            CryptoLayer::diffie_hellman(alice_keys.private_key(), &bob_keys.public).unwrap();
+        let shared_b =
+            CryptoLayer::diffie_hellman(bob_keys.private_key(), &alice_keys.public).unwrap();
         alice.create_session("bob", &shared_a);
         bob.create_session("alice", &shared_b);
 
@@ -591,8 +610,10 @@ mod tests {
         let mut bob = CryptoLayer::new();
         let alice_keys = alice.generate_keypair().unwrap();
         let bob_keys = bob.generate_keypair().unwrap();
-        let shared_a = CryptoLayer::diffie_hellman(alice_keys.private_key(), &bob_keys.public).unwrap();
-        let shared_b = CryptoLayer::diffie_hellman(bob_keys.private_key(), &alice_keys.public).unwrap();
+        let shared_a =
+            CryptoLayer::diffie_hellman(alice_keys.private_key(), &bob_keys.public).unwrap();
+        let shared_b =
+            CryptoLayer::diffie_hellman(bob_keys.private_key(), &alice_keys.public).unwrap();
         alice.create_session("bob", &shared_a);
         bob.create_session("alice", &shared_b);
 
@@ -611,7 +632,8 @@ mod tests {
         let kp = crypto.generate_keypair().unwrap();
         let their_secret = x25519_dalek::EphemeralSecret::random_from_rng(OsRng);
         let their_public = PublicKey::from(&their_secret);
-        let shared = CryptoLayer::diffie_hellman(kp.private_key(), their_public.as_bytes()).unwrap();
+        let shared =
+            CryptoLayer::diffie_hellman(kp.private_key(), their_public.as_bytes()).unwrap();
         crypto.create_session("peer-a", &shared);
         assert_eq!(crypto.session_count(), 1);
         crypto.remove_session("peer-a");

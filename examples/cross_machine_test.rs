@@ -9,9 +9,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use ed25519_dalek::SigningKey;
 use chorus_core::identity::{did_from_pubkey, IdentityBuilder};
 use chorus_core::p2p::{P2PConfig, P2PEvent, P2PNetwork};
+use ed25519_dalek::SigningKey;
 
 fn parse_args() -> (char, String, u16, Option<String>) {
     let args: Vec<String> = std::env::args().collect();
@@ -22,10 +22,22 @@ fn parse_args() -> (char, String, u16, Option<String>) {
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
-            "--role" if i + 1 < args.len() => { role = args[i + 1].chars().next().unwrap_or('a'); i += 2; }
-            "--listen" if i + 1 < args.len() => { listen_ip = args[i + 1].clone(); i += 2; }
-            "--port" if i + 1 < args.len() => { port = args[i + 1].parse().unwrap_or(7001); i += 2; }
-            "--dial" if i + 1 < args.len() => { dial_addr = Some(args[i + 1].clone()); i += 2; }
+            "--role" if i + 1 < args.len() => {
+                role = args[i + 1].chars().next().unwrap_or('a');
+                i += 2;
+            }
+            "--listen" if i + 1 < args.len() => {
+                listen_ip = args[i + 1].clone();
+                i += 2;
+            }
+            "--port" if i + 1 < args.len() => {
+                port = args[i + 1].parse().unwrap_or(7001);
+                i += 2;
+            }
+            "--dial" if i + 1 < args.len() => {
+                dial_addr = Some(args[i + 1].clone());
+                i += 2;
+            }
             _ => i += 1,
         }
     }
@@ -44,7 +56,9 @@ fn name_to_seed(name: &str) -> [u8; 32] {
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+        )
         .init();
 
     let (role, listen_ip, port, dial_addr) = parse_args();
@@ -53,10 +67,19 @@ async fn main() {
     println!("╔══════════════════════════════════════════════════════════╗");
     println!("║  🌐 Chorus — Cross-Machine P2P E2EE Test                ║");
     println!("╚══════════════════════════════════════════════════════════╝");
-    println!("  Role:       Node {} ({})", role.to_ascii_uppercase(),
-        if dial_addr.is_some() { "DIALER" } else { "LISTENER" });
+    println!(
+        "  Role:       Node {} ({})",
+        role.to_ascii_uppercase(),
+        if dial_addr.is_some() {
+            "DIALER"
+        } else {
+            "LISTENER"
+        }
+    );
     println!("  Listen:     {}:{}", listen_ip, port);
-    if let Some(ref d) = dial_addr { println!("  Dial:       {}", d); }
+    if let Some(ref d) = dial_addr {
+        println!("  Dial:       {}", d);
+    }
     println!();
 
     // Step 1: Identity
@@ -64,11 +87,12 @@ async fn main() {
     let seed = name_to_seed(&node_name);
     let signing_key = SigningKey::from_bytes(&seed);
     let did = did_from_pubkey(&signing_key.verifying_key().to_bytes());
-    println!("  🆔 DID: {}…{}", &did[..24], &did[did.len()-8..]);
+    println!("  🆔 DID: {}…{}", &did[..24], &did[did.len() - 8..]);
 
     let (identity, _) = IdentityBuilder::new(&format!("Node-{}", role.to_ascii_uppercase()))
         .capabilities(&["cross-machine-test", "e2ee-verify"])
-        .build().unwrap();
+        .build()
+        .unwrap();
     println!("  ✅ AgentIdentity signed: {}", identity.short_id());
     println!();
 
@@ -84,8 +108,8 @@ async fn main() {
         ..Default::default()
     };
 
-    let (net, mut ev) = P2PNetwork::new(p2p_config)
-        .unwrap_or_else(|e| panic!("Network create failed: {e}"));
+    let (net, mut ev) =
+        P2PNetwork::new(p2p_config).unwrap_or_else(|e| panic!("Network create failed: {e}"));
 
     let actual_listen = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
@@ -95,7 +119,9 @@ async fn main() {
                 None => panic!("Channel closed"),
             }
         }
-    }).await.expect("Timeout waiting for Listening");
+    })
+    .await
+    .expect("Timeout waiting for Listening");
 
     println!("  📡 Listening on: {}", actual_listen);
     println!();
@@ -119,26 +145,45 @@ async fn main() {
     let remote_peer_id = tokio::time::timeout(Duration::from_secs(15), async {
         loop {
             match ev.recv().await {
-                Some(P2PEvent::SessionEstablished { peer_id, .. }) => return Ok::<_, String>(peer_id),
-                Some(P2PEvent::PeerConnected { peer_id }) => println!("  🔗 Peer connected: {}", peer_id),
-                Some(_) => {},
+                Some(P2PEvent::SessionEstablished { peer_id, .. }) => {
+                    return Ok::<_, String>(peer_id)
+                }
+                Some(P2PEvent::PeerConnected { peer_id }) => {
+                    println!("  🔗 Peer connected: {}", peer_id)
+                }
+                Some(_) => {}
                 None => return Err("Channel closed".into()),
             }
         }
-    }).await;
+    })
+    .await;
 
     let remote_peer_id = match remote_peer_id {
-        Ok(Ok(pid)) => { println!("  ✅ E2EE session with {}", pid); pid }
-        Ok(Err(e)) => { println!("  ❌ {}", e); return; }
-        Err(_) => { println!("  ❌ Timeout 15s — check firewall/IP/port"); return; }
+        Ok(Ok(pid)) => {
+            println!("  ✅ E2EE session with {}", pid);
+            pid
+        }
+        Ok(Err(e)) => {
+            println!("  ❌ {}", e);
+            return;
+        }
+        Err(_) => {
+            println!("  ❌ Timeout 15s — check firewall/IP/port");
+            return;
+        }
     };
     println!();
 
     // Step 5: Send hello
     println!("── Step 5: Send Encrypted Message ──");
-    let hello = format!("Hello from Node {}! Cross-machine E2EE OK.", role.to_ascii_uppercase());
+    let hello = format!(
+        "Hello from Node {}! Cross-machine E2EE OK.",
+        role.to_ascii_uppercase()
+    );
     println!("  💬 \"{}\"", hello);
-    net.send_encrypted(remote_peer_id, hello.as_bytes().to_vec()).await.ok();
+    net.send_encrypted(remote_peer_id, hello.as_bytes().to_vec())
+        .await
+        .ok();
     tokio::time::sleep(Duration::from_millis(500)).await;
     println!();
 
@@ -147,8 +192,12 @@ async fn main() {
     let mut received: Vec<String> = Vec::new();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
-        let rem = deadline.checked_duration_since(tokio::time::Instant::now()).unwrap_or_default();
-        if rem.is_zero() { break; }
+        let rem = deadline
+            .checked_duration_since(tokio::time::Instant::now())
+            .unwrap_or_default();
+        if rem.is_zero() {
+            break;
+        }
         match tokio::time::timeout(rem, ev.recv()).await {
             Ok(Some(P2PEvent::EncryptedMessage { plaintext, .. })) => {
                 if let Ok(t) = String::from_utf8(plaintext.clone()) {
@@ -172,23 +221,45 @@ async fn main() {
     // Step 7: Multi-msg
     println!("── Step 7: Multi-Message Round-Trip ──");
     for i in 1..=3 {
-        let m = format!("msg-{} from {}: test {}", i, role.to_ascii_uppercase(),
-            if i == 1 { "ping" } else if i == 2 { "crypto OK" } else { "cross-machine confirmed" });
-        net.send_encrypted(remote_peer_id, m.as_bytes().to_vec()).await.ok();
+        let m = format!(
+            "msg-{} from {}: test {}",
+            i,
+            role.to_ascii_uppercase(),
+            if i == 1 {
+                "ping"
+            } else if i == 2 {
+                "crypto OK"
+            } else {
+                "cross-machine confirmed"
+            }
+        );
+        net.send_encrypted(remote_peer_id, m.as_bytes().to_vec())
+            .await
+            .ok();
         println!("  ✅ Sent: {}", m);
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
     // Collect
     let d2 = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
-        let rem = d2.checked_duration_since(tokio::time::Instant::now()).unwrap_or_default();
-        if rem.is_zero() { break; }
+        let rem = d2
+            .checked_duration_since(tokio::time::Instant::now())
+            .unwrap_or_default();
+        if rem.is_zero() {
+            break;
+        }
         match tokio::time::timeout(rem, ev.recv()).await {
             Ok(Some(P2PEvent::EncryptedMessage { plaintext, .. })) => {
-                if let Ok(t) = String::from_utf8(plaintext.clone()) { received.push(t.clone()); println!("  📨 {}", t); }
+                if let Ok(t) = String::from_utf8(plaintext.clone()) {
+                    received.push(t.clone());
+                    println!("  📨 {}", t);
+                }
             }
             Ok(Some(P2PEvent::RawMessage { data, .. })) => {
-                if let Ok(t) = String::from_utf8(data.clone()) { received.push(t.clone()); println!("  📨 [RAW] {}", t); }
+                if let Ok(t) = String::from_utf8(data.clone()) {
+                    received.push(t.clone());
+                    println!("  📨 [RAW] {}", t);
+                }
             }
             Ok(Some(_)) => continue,
             _ => break,
@@ -199,15 +270,46 @@ async fn main() {
     // Summary
     let ok = !received.is_empty();
     println!("╔══════════════════════════════════════════════════════════╗");
-    println!("║  🌐 Cross-Machine Test — Node {} Result                   ║", role.to_ascii_uppercase());
+    println!(
+        "║  🌐 Cross-Machine Test — Node {} Result                   ║",
+        role.to_ascii_uppercase()
+    );
     println!("╠══════════════════════════════════════════════════════════╣");
-    println!("║  📡 Listen:   {}", format!("{:<44}║", truncate(&actual_listen, 44)));
-    println!("║  🔗 Remote:   {}", format!("{:<44}║", truncate(&remote_peer_id.to_string(), 44)));
-    println!("║  🔐 E2EE:     {}", format!("{:<44}║", if ok { "✅ VERIFIED" } else { "❌ NOT VERIFIED" }));
+    println!(
+        "║  📡 Listen:   {}",
+        format!("{:<44}║", truncate(&actual_listen, 44))
+    );
+    println!(
+        "║  🔗 Remote:   {}",
+        format!("{:<44}║", truncate(&remote_peer_id.to_string(), 44))
+    );
+    println!(
+        "║  🔐 E2EE:     {}",
+        format!(
+            "{:<44}║",
+            if ok {
+                "✅ VERIFIED"
+            } else {
+                "❌ NOT VERIFIED"
+            }
+        )
+    );
     println!("║  💬 Sent:     {}", format!("{:<44}║", "4 messages"));
-    println!("║  📨 Recv:     {}", format!("{} messages{:>35}║", received.len(), ""));
-    println!("║  RESULT:     {}", format!("{:<44}║",
-        if ok { "✅ CROSS-MACHINE E2EE VERIFIED" } else { "⚠️ NO MESSAGES RECEIVED" }));
+    println!(
+        "║  📨 Recv:     {}",
+        format!("{} messages{:>35}║", received.len(), "")
+    );
+    println!(
+        "║  RESULT:     {}",
+        format!(
+            "{:<44}║",
+            if ok {
+                "✅ CROSS-MACHINE E2EE VERIFIED"
+            } else {
+                "⚠️ NO MESSAGES RECEIVED"
+            }
+        )
+    );
     println!("╚══════════════════════════════════════════════════════════╝");
 
     tokio::time::sleep(Duration::from_secs(3)).await;
@@ -216,5 +318,9 @@ async fn main() {
 }
 
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max { s.to_string() } else { format!("{}…", &s[..max-1]) }
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        format!("{}…", &s[..max - 1])
+    }
 }
