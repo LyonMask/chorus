@@ -1,23 +1,19 @@
 # Chorus
 
-> **Agents in harmony.**
+The open communication layer for AI agents. Peer-to-peer, end-to-end encrypted, no central servers.
 
-The open communication layer for AI agents. Decentralized, end-to-end encrypted, and built for a world where agents talk to agents.
+## Why
 
-## Why Chorus?
+AI agents need to talk to each other. Today they rely on human tools (Slack, WhatsApp) or enterprise APIs not designed for machine-to-machine communication. Chorus provides a dedicated messaging layer built for agents.
 
-AI agents are becoming autonomous workers — writing code, analyzing data, making decisions. But when agents need to talk to each other, they're stuck using human tools (Slack, WhatsApp) or enterprise APIs that weren't designed for machine-to-machine conversation.
+**Key properties:**
 
-**Chorus is the IM layer built for agents, by agents.**
+- Peer-to-peer via libp2p — no central server, no single point of failure, no vendor lock-in
+- End-to-end encrypted — Ed25519 + X25519 + ChaCha20-Poly1305, every message
+- Decentralized identity — each agent gets a DID (`did:chorus:<base58>`), no registration needed
+- Fast setup — build, init, talk
 
-- 🕸️ **No central servers** — Pure P2P via libp2p. No single point of failure. No vendor lock-in.
-- 🔐 **End-to-end encrypted** — Every message. Every time. Based on Ed25519 + X25519 + ChaCha20-Poly1305.
-- 🆔 **Decentralized identity** — Every agent gets a DID (`did:chorus:<base58>`). No registration, no gatekeeper.
-- ⚡ **Fast setup** — Two commands and your agents are talking.
-
-## Quick Start (5 minutes)
-
-### 1. Build
+## Quick Start
 
 ```bash
 git clone https://github.com/LyonMask/chorus.git
@@ -25,48 +21,44 @@ cd chorus
 cargo build --release
 ```
 
-### 2. Create your agent identity
+Generate an agent identity:
 
 ```bash
 ./target/release/wt init
 ```
 
-This generates an Ed25519 keypair and a DID for your agent.
+Start two agents on the same machine:
 
-### 3. Start talking
-
-**Terminal A (Agent Alice):**
 ```bash
+# Terminal A
 ./target/release/wt daemon --name alice
-```
 
-**Terminal B (Agent Bob):**
-```bash
+# Terminal B
 ./target/release/wt daemon --name bob
 ```
 
-Agents on the same network discover each other via mDNS and start communicating through E2EE channels. That's it.
+Agents discover each other via mDNS and communicate over E2EE channels.
 
-### Cross-machine (two different computers)
+For cross-machine setup:
 
 ```bash
-# On machine A
+# Machine A
 ./target/release/wt daemon --name alice --listen /ip4/0.0.0.0/tcp/0
 
-# On machine B (replace with A's address from logs)
+# Machine B (use the address from machine A's logs)
 ./target/release/wt daemon --name bob --bootstrap /ip4/A.B.C.D/tcp/XXXXX/p2p/QmXXX...
 ```
 
-## What's in the box
+## Modules
 
 | Module | Description |
 |--------|-------------|
-| **P2P Networking** | libp2p Gossipsub + Direct messaging, mDNS discovery, NAT traversal, relay support |
-| **Cryptography** | Ed25519 signing, X25519 key exchange, ChaCha20-Poly1305 AEAD encryption |
-| **Identity** | DID generation (`did:chorus:<base58>`), key management, zeroize-protected private keys |
-| **Protocol** | Structured messages — chat, task, resource, endorsement, system |
-| **CLI** | `wt` command-line tool for identity management and daemon control |
-| **TUI** | Optional terminal UI for monitoring and interaction |
+| P2P Networking | libp2p Gossipsub, direct messaging, mDNS discovery, NAT traversal, relay |
+| Cryptography | Ed25519 signing, X25519 key exchange, ChaCha20-Poly1305 AEAD |
+| Identity | DID generation, key management, zeroize-protected private keys |
+| Protocol | Structured messages (chat, task, resource, endorsement, system) |
+| CLI | `wt` command-line tool |
+| TUI | Optional terminal UI (enable with `--features tui`) |
 
 ## Architecture
 
@@ -86,49 +78,26 @@ Agents on the same network discover each other via mDNS and start communicating 
 ## Examples
 
 ```bash
-# Basic P2P chat
 cargo run --example p2p_basic
-
-# Encrypted agent chat
 cargo run --example encrypted_chat
-
-# TUI demo
 cargo run --example tui_demo --features tui
-
-# Cross-machine test
 cargo run --example cross_machine_test
 ```
-
-## Cross-framework
-
-Chorus works across agent frameworks:
-
-- **Any framework** — Use the CLI or build on the core library
-- **Hermes (Nous Research)** — Verified cross-framework E2EE calls
-- **Any framework** — Use the CLI or build on the core library
 
 ## Requirements
 
 - Rust 1.75+
-- macOS / Linux (Windows WSL supported)
+- macOS or Linux (Windows via WSL)
 
 ## Roadmap
 
-- ✅ P2P messaging + E2EE + identity
-- ✅ Cross-machine, cross-framework verified
-- 🔜 Homebrew installer (`brew install chorus`)
-- 🔜 Python / JS SDK
-- 🔜 MCP server integration
-- 🔜 Advanced relay and NAT traversal
+- [x] P2P messaging, E2EE, decentralized identity
+- [x] Cross-machine and cross-framework verification
+- [ ] Homebrew installer
+- [ ] Python and JavaScript SDKs
+- [ ] MCP server integration
+- [ ] Improved NAT traversal and relay
 
 ## License
 
-Apache License 2.0 — free to use, modify, and distribute. See [LICENSE](LICENSE).
-
-## Contributing
-
-Contributions welcome! This is early-stage software and there's a lot to build. Feel free to open issues, submit PRs, or start a discussion.
-
----
-
-*Chorus — Where agents find their voice.*
+Apache License 2.0. See [LICENSE](LICENSE).
