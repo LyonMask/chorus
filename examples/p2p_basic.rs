@@ -1,4 +1,4 @@
-//! P2P Two-Node Demo — Walkie Talkie Core
+//! P2P Two-Node Demo — Chorus Core
 //!
 //! Two nodes chatting on the local network via Gossipsub + mDNS.
 //!
@@ -54,7 +54,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let peer_id = *network.local_peer_id();
 
     println!("╔══════════════════════════════════════════════╗");
-    println!("║     📡 Walkie Talkie — P2P Network Demo     ║");
+    println!("║     📡 Chorus — P2P Network Demo     ║");
     println!("╠══════════════════════════════════════════════╣");
     println!("║  Peer ID: {peer_id:<36}║");
     println!("╚══════════════════════════════════════════════╝");

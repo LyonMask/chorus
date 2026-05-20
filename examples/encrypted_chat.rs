@@ -1,4 +1,4 @@
-//! Encrypted P2P Chat — Walkie Talkie Core (Phase D)
+//! Encrypted P2P Chat — Chorus Core (Phase D)
 //!
 //! Two nodes with **automatic E2EE**: key exchange happens on connect,
 //! all messages are transparently encrypted/decrypted by P2PNetwork.
@@ -63,7 +63,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     println!();
     println!("╔═══════════════════════════════════════════════════╗");
-    println!("║   🔐 Walkie Talkie — Encrypted P2P Chat         ║");
+    println!("║   🔐 Chorus — Encrypted P2P Chat         ║");
     println!("╠═══════════════════════════════════════════════════╣");
     println!("║  Peer   : {my_short}...                            ║");
     println!("║  Crypto : X25519 + ChaCha20-Poly1305             ║");

@@ -169,7 +169,7 @@ async fn run_demo() -> Result<(), Box<dyn Error>> {
         .with_env_filter("warn")
         .init();
 
-    header("🤖 Walkie Talkie — 3-Agent Collaboration Demo");
+    header("🤖 Chorus — 3-Agent Collaboration Demo");
     println!("  Layer 0: P2P + E2EE (libp2p + X25519 + ChaCha20)");
     println!("  Layer 1: Agent Identity (Ed25519 DID)");
     println!("  Layer 2: Structured Messaging (6 message types)");

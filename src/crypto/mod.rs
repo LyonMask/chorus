@@ -340,7 +340,7 @@ mod tests {
     #[test]
     fn test_encrypt_decrypt_roundtrip() {
         let mut session = make_test_session();
-        let plaintext = b"Hello, Walkie Talkie!";
+        let plaintext = b"Hello, Chorus!";
         let encrypted = session.encrypt(plaintext).unwrap();
         let decrypted = session.decrypt(&encrypted).unwrap();
         assert_eq!(plaintext.to_vec(), decrypted);

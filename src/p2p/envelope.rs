@@ -3,8 +3,8 @@
 //! Serialized as JSON over Gossipsub (or, in the future, over
 //! a dedicated request-response Direct channel).
 
-/// Gossipsub topic for walkie-talkie messages.
-pub const WT_TOPIC: &str = "/walkie-talkie/1.0.0";
+/// Gossipsub topic for chorus messages.
+pub const WT_TOPIC: &str = "/chorus/1.0.0";
 
 /// Wire format for all encrypted traffic.
 ///

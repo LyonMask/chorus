@@ -195,7 +195,7 @@ impl App {
                 self.add_agent(
                     &peer_id.to_string(),
                     &format!("Agent-{}", &peer_id.to_string()[..8]),
-                    &format!("did:walkie:{}", &peer_id.to_string()[..12]),
+                    &format!("did:chorus:{}", &peer_id.to_string()[..12]),
                     vec![],
                 );
                 self.add_activity(ActivityItem {
@@ -510,11 +510,11 @@ impl App {
         // Simulate 3 agents connecting
         if self.demo_tick == 1 {
             self.demo_mode = true;
-            self.add_agent("alice", "Alice", "did:walkie:maMVNJDswURGw",
+            self.add_agent("alice", "Alice", "did:chorus:maMVNJDswURGw",
                 vec!["coordinate".into(), "strategy".into()]);
-            self.add_agent("rustacean", "Rustacean", "did:walkie:fLYf2Xc0I3qyO",
+            self.add_agent("rustacean", "Rustacean", "did:chorus:fLYf2Xc0I3qyO",
                 vec!["code-review".into(), "crypto".into(), "p2p".into()]);
-            self.add_agent("bridge", "Bridge", "did:walkie:fmYIb9jntMvbj",
+            self.add_agent("bridge", "Bridge", "did:chorus:fmYIb9jntMvbj",
                 vec!["product".into(), "review".into(), "human-handoff".into()]);
             self.add_activity(ActivityItem {
                 timestamp: now_str(), actor: "System".into(),
@@ -608,7 +608,7 @@ fn draw(f: &mut Frame, app: &App) {
 }
 
 fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
-    let title = format!(" 🏠 Walkie Talkie — {} ", app.my_name);
+    let title = format!(" 🏠 Chorus — {} ", app.my_name);
     let alerts = if app.pending_approvals > 0 {
         format!(" 🔔 {} pending ", app.pending_approvals)
     } else {

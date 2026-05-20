@@ -28,7 +28,7 @@ fn test_config(port: u16) -> P2PConfig {
 fn test_identity(name: &str) -> AgentIdentity {
     IdentityBuilder::new(name)
         .capability("test")
-        .owner_id(&format!("did:walkie:{name}"))
+        .owner_id(&format!("did:chorus:{name}"))
         .build()
         .expect("identity build")
         .0

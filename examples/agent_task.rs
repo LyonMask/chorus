@@ -34,7 +34,7 @@ async fn main() -> anyhow::Result<()> {
         .build()?;
 
     println!("╔══════════════════════════════════════════╗");
-    println!("║   Agent Task POC — Walkie Talkie v4     ║");
+    println!("║   Agent Task POC — Chorus v4     ║");
     println!("╚══════════════════════════════════════════╝");
     println!();
     println!("  Agent ID:     {}", my_identity.short_id());

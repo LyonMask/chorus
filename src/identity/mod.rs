@@ -1,12 +1,12 @@
-//! Agent Identity Protocol — Walkie Talkie v4
+//! Agent Identity Protocol — Chorus v4
 //!
 //! Each Agent has a cryptographically-verifiable identity:
-//!   - **agent_id**: `did:walkie:<ed25519-pubkey-base64url>` — globally unique
+//!   - **agent_id**: `did:chorus:<ed25519-pubkey-base64url>` — globally unique
 //!   - **signing keypair**: Ed25519 — signs identity claims + messages
 //!   - **capabilities**: declared abilities (e.g. "code-review", "translate")
 //!
 //! Wire exchange happens via a dedicated Gossipsub topic
-//! (`/walkie-talkie/identity/1.0.0`) after the E2EE session is established.
+//! (`/chorus/identity/1.0.0`) after the E2EE session is established.
 
 use ed25519_dalek::{SigningKey, VerifyingKey, Signer, Verifier, Signature};
 use rand::rngs::OsRng;
@@ -15,19 +15,19 @@ use thiserror::Error;
 
 // ─── DID Format ──────────────────────────────────────────────────
 
-/// DID method prefix for Walkie Talkie agents.
-pub const DID_PREFIX: &str = "did:walkie";
+/// DID method prefix for Chorus agents.
+pub const DID_PREFIX: &str = "did:chorus";
 
 /// Identity exchange Gossipsub topic.
-pub const IDENTITY_TOPIC: &str = "/walkie-talkie/identity/1.0.0";
+pub const IDENTITY_TOPIC: &str = "/chorus/identity/1.0.0";
 
-/// Convert a raw Ed25519 public key (32 bytes) to a did:walkie string.
+/// Convert a raw Ed25519 public key (32 bytes) to a did:chorus string.
 pub fn did_from_pubkey(pubkey_bytes: &[u8]) -> String {
     let encoded = base64_url_encode(pubkey_bytes);
     format!("{DID_PREFIX}:{encoded}")
 }
 
-/// Extract the raw public key bytes from a did:walkie string.
+/// Extract the raw public key bytes from a did:chorus string.
 /// Returns None if the format is invalid.
 pub fn pubkey_from_did(did: &str) -> Option<Vec<u8>> {
     let rest = did.strip_prefix(DID_PREFIX)?.strip_prefix(':')?;
@@ -52,7 +52,7 @@ fn base64_url_decode_inner(data: &str) -> std::result::Result<Vec<u8>, base64::D
 /// Ed25519 signature over the canonical JSON of all other fields.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentIdentity {
-    /// Globally unique identifier: `did:walkie:<base64url-pubkey>`
+    /// Globally unique identifier: `did:chorus:<base64url-pubkey>`
     pub agent_id: String,
 
     /// Human-readable name (e.g. "Rustacean", "CodeReview Bot")
@@ -287,10 +287,10 @@ impl IdentityBuilder {
 
 // ─── Identity Registry (PeerId↔DID Binding) ─────────────────────
 
-/// A verified mapping between a libp2p PeerId and a did:walkie DID.
+/// A verified mapping between a libp2p PeerId and a did:chorus DID.
 #[derive(Debug, Clone)]
 pub struct PeerDidBinding {
-    /// The did:walkie identifier (e.g. "did:walkie:abc123")
+    /// The did:chorus identifier (e.g. "did:chorus:abc123")
     pub did: String,
     /// Ed25519 public key (32 bytes)
     pub pub_key: Vec<u8>,
@@ -421,7 +421,7 @@ mod tests {
     fn test_did_roundtrip() {
         let pubkey = [0xABu8; 32];
         let did = did_from_pubkey(&pubkey);
-        assert!(did.starts_with("did:walkie:"));
+        assert!(did.starts_with("did:chorus:"));
         assert_eq!(did.len(), 11 + 43); // prefix + base64url(32 bytes) ≈ 43
 
         let recovered = pubkey_from_did(&did).unwrap();
@@ -431,7 +431,7 @@ mod tests {
     #[test]
     fn test_pubkey_from_invalid_did() {
         assert!(pubkey_from_did("not-a-did").is_none());
-        assert!(pubkey_from_did("did:walkie:!!!invalid-base64").is_none());
+        assert!(pubkey_from_did("did:chorus:!!!invalid-base64").is_none());
         assert!(pubkey_from_did("did:other:abc").is_none());
     }
 
@@ -441,15 +441,15 @@ mod tests {
     fn test_create_and_verify_identity() {
         let (identity, _signing_key) = IdentityBuilder::new("Rustacean")
             .capabilities(&["p2p-routing", "crypto"])
-            .owner_id("did:walkie:owner123")
+            .owner_id("did:chorus:owner123")
             .version("0.2.0")
             .build()
             .unwrap();
 
-        assert!(identity.agent_id.starts_with("did:walkie:"));
+        assert!(identity.agent_id.starts_with("did:chorus:"));
         assert_eq!(identity.display_name, "Rustacean");
         assert_eq!(identity.capabilities, vec!["p2p-routing", "crypto"]);
-        assert_eq!(identity.owner_id, "did:walkie:owner123");
+        assert_eq!(identity.owner_id, "did:chorus:owner123");
         assert_eq!(identity.version, "0.2.0");
         assert_eq!(identity.public_key.len(), 32);
         assert_eq!(identity.signature.len(), 64);
@@ -552,7 +552,7 @@ mod tests {
     fn test_identity_serialization_roundtrip() {
         let (identity, _) = IdentityBuilder::new("TestBot")
             .capabilities(&["code-review"])
-            .owner_id("did:walkie:org")
+            .owner_id("did:chorus:org")
             .build()
             .unwrap();
 
@@ -592,7 +592,7 @@ mod tests {
             .unwrap();
         let short = identity.short_id();
         assert_eq!(short.len(), 24);
-        assert!(short.starts_with("did:walkie:"));
+        assert!(short.starts_with("did:chorus:"));
     }
 
     #[test]
@@ -639,8 +639,8 @@ mod tests {
     #[test]
     fn test_did_empty_string() {
         assert!(pubkey_from_did("").is_none());
-        // "did:walkie:" decodes to Some([]) (empty base64url = empty vec)
-        let result = pubkey_from_did("did:walkie:");
+        // "did:chorus:" decodes to Some([]) (empty base64url = empty vec)
+        let result = pubkey_from_did("did:chorus:");
         assert!(result.is_some());
         assert!(result.unwrap().is_empty());
     }
@@ -650,7 +650,7 @@ mod tests {
         // 16 bytes instead of 32 — should encode/decode fine but produce wrong DID
         let short = [0xABu8; 16];
         let did = did_from_pubkey(&short);
-        assert!(did.starts_with("did:walkie:"));
+        assert!(did.starts_with("did:chorus:"));
         let recovered = pubkey_from_did(&did).unwrap();
         assert_eq!(recovered.len(), 16);
     }
@@ -685,7 +685,7 @@ mod tests {
     fn test_registry_bind_and_lookup() {
         let mut registry = IdentityRegistry::new();
         let peer_id = "12D3KooWABC";
-        let did = "did:walkie:test-key";
+        let did = "did:chorus:test-key";
         let pubkey = vec![42u8; 32];
 
         registry.bind(peer_id, did, pubkey.clone());
@@ -698,24 +698,24 @@ mod tests {
     fn test_registry_reverse_lookup() {
         let mut registry = IdentityRegistry::new();
 
-        registry.bind("peer-1", "did:walkie:alice", vec![1u8; 32]);
-        registry.bind("peer-2", "did:walkie:bob", vec![2u8; 32]);
+        registry.bind("peer-1", "did:chorus:alice", vec![1u8; 32]);
+        registry.bind("peer-2", "did:chorus:bob", vec![2u8; 32]);
 
-        assert_eq!(registry.peer_for_did("did:walkie:alice"), Some("peer-1"));
-        assert_eq!(registry.peer_for_did("did:walkie:bob"), Some("peer-2"));
+        assert_eq!(registry.peer_for_did("did:chorus:alice"), Some("peer-1"));
+        assert_eq!(registry.peer_for_did("did:chorus:bob"), Some("peer-2"));
     }
 
     #[test]
     fn test_registry_unbind() {
         let mut registry = IdentityRegistry::new();
 
-        registry.bind("peer-1", "did:walkie:alice", vec![1u8; 32]);
+        registry.bind("peer-1", "did:chorus:alice", vec![1u8; 32]);
         assert_eq!(registry.len(), 1);
 
         let removed = registry.unbind("peer-1");
         assert!(removed);
         assert!(registry.did_for_peer("peer-1").is_none());
-        assert!(registry.peer_for_did("did:walkie:alice").is_none());
+        assert!(registry.peer_for_did("did:chorus:alice").is_none());
         assert_eq!(registry.len(), 0);
     }
 
@@ -724,16 +724,16 @@ mod tests {
         let mut registry = IdentityRegistry::new();
 
         // Bind alice to peer-1
-        registry.bind("peer-1", "did:walkie:alice", vec![1u8; 32]);
+        registry.bind("peer-1", "did:chorus:alice", vec![1u8; 32]);
         // Rebind alice to peer-2 (simulates reconnection with new PeerId)
-        registry.bind("peer-2", "did:walkie:alice", vec![1u8; 32]);
+        registry.bind("peer-2", "did:chorus:alice", vec![1u8; 32]);
 
         // Old binding should be gone
         assert!(registry.did_for_peer("peer-1").is_none());
         // New binding should work
-        assert_eq!(registry.did_for_peer("peer-2"), Some("did:walkie:alice"));
+        assert_eq!(registry.did_for_peer("peer-2"), Some("did:chorus:alice"));
         // DID should map to new peer
-        assert_eq!(registry.peer_for_did("did:walkie:alice"), Some("peer-2"));
+        assert_eq!(registry.peer_for_did("did:chorus:alice"), Some("peer-2"));
         // Only 1 binding total
         assert_eq!(registry.len(), 1);
     }
@@ -743,10 +743,10 @@ mod tests {
         let mut registry = IdentityRegistry::new();
         let pubkey = vec![42u8; 32];
 
-        registry.bind("peer-1", "did:walkie:alice", pubkey.clone());
+        registry.bind("peer-1", "did:chorus:alice", pubkey.clone());
         let binding = registry.get_binding("peer-1").unwrap();
 
-        assert_eq!(binding.did, "did:walkie:alice");
+        assert_eq!(binding.did, "did:chorus:alice");
         assert_eq!(binding.pub_key, pubkey);
         assert!(binding.bound_at > 0);
     }

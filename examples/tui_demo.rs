@@ -78,7 +78,7 @@ fn draw_status(f: &mut Frame, app: &TuiApp, area: ratatui::layout::Rect) {
     };
 
     let bar = Paragraph::new(Line::from(vec![
-        Span::styled(" 🏠 Walkie Talkie ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::styled(" 🏠 Chorus ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
         Span::raw(app.status_line()),
         pending,
     ])).style(Style::default().bg(Color::DarkGray).fg(Color::White));
@@ -274,7 +274,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         P2PEvent::PeerConnected { peer_id } => {
                             app.add_agent(&peer_id.to_string(),
                                 &format!("Agent-{}", &peer_id.to_string()[..8]),
-                                &format!("did:walkie:{}", &peer_id.to_string()[..12]));
+                                &format!("did:chorus:{}", &peer_id.to_string()[..12]));
                             app.push_activity(chorus_core::tui::ActivityItem::new(
                                 "System", chorus_core::tui::ActivityAction::Connected,
                                 &format!("Peer {} connected", &peer_id.to_string()[..16])));

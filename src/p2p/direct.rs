@@ -15,7 +15,7 @@ use libp2p::PeerId;
 // ── Protocol constants ─────────────────────────────────────────
 
 /// Protocol name registered on the multistream-select registry.
-pub const WT_DIRECT_PROTOCOL: &str = "/walkie-talkie/direct/1.0.0";
+pub const WT_DIRECT_PROTOCOL: &str = "/chorus/direct/1.0.0";
 
 /// Request timeout for inbound and outbound requests.
 pub const DIRECT_REQUEST_TIMEOUT_SECS: u64 = 10;

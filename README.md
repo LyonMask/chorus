@@ -103,7 +103,7 @@ cargo run --example cross_machine_test
 
 Chorus works across agent frameworks:
 
-- **OpenClaw** — Native integration via CLI
+- **Any framework** — Use the CLI or build on the core library
 - **Hermes (Nous Research)** — Verified cross-framework E2EE calls
 - **Any framework** — Use the CLI or build on the core library
 

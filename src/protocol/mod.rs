@@ -1,4 +1,4 @@
-//! Agent Structured Messaging Protocol — Walkie Talkie v4 Layer 2
+//! Agent Structured Messaging Protocol — Chorus v4 Layer 2
 //!
 //! Agents don't just send bytes. They send structured messages with
 //! intent, priority, reply chains, and human-handoff flags.
@@ -156,7 +156,7 @@ pub struct AgentMessage {
     /// Sender's verified AgentIdentity (the full signed identity document).
     pub from_agent: AgentIdentity,
 
-    /// Recipient's agent_id (did:walkie:...). Empty string = broadcast.
+    /// Recipient's agent_id (did:chorus:...). Empty string = broadcast.
     #[serde(default)]
     pub to_agent: String,
 
@@ -391,7 +391,7 @@ mod tests {
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed.try_into().unwrap());
         IdentityBuilder::new(name)
             .capabilities(&["test"])
-            .owner_id("did:walkie:test-owner")
+            .owner_id("did:chorus:test-owner")
             .build_with_key(&signing_key)
             .unwrap()
     }
@@ -400,7 +400,7 @@ mod tests {
 
     #[test]
     fn test_message_id_generate() {
-        let id = MessageId::generate("did:walkie:abcdef1234567890");
+        let id = MessageId::generate("did:chorus:abcdef1234567890");
         assert!(id.as_str().contains('_'));
         // Format: <8chars>_<timestamp>_<6hex>
         let parts: Vec<&str> = id.as_str().split('_').collect();
@@ -509,11 +509,11 @@ mod tests {
     fn test_builder_pattern() {
         let agent = make_test_agent("Alice");
         let msg = AgentMessage::new(&agent, MessageProtocol::DataExchange, serde_json::json!({}))
-            .to("did:walkie:bob")
+            .to("did:chorus:bob")
             .priority(Priority::HIGH)
             .requires_human();
 
-        assert_eq!(msg.to_agent, "did:walkie:bob");
+        assert_eq!(msg.to_agent, "did:chorus:bob");
         assert_eq!(msg.priority, Priority::HIGH);
         assert!(msg.requires_human);
     }
@@ -596,14 +596,14 @@ mod tests {
     #[test]
     fn test_full_serialization_roundtrip() {
         let agent = make_test_agent("Rustacean");
-        let original_id = MessageId::generate("did:walkie:xyz");
+        let original_id = MessageId::generate("did:chorus:xyz");
 
         let msg = AgentMessage::new(&agent, MessageProtocol::TaskAssignment, serde_json::json!({
             "task": "review-pr",
             "target": "#42",
             "deadline_ms": 3600000
         }))
-            .to("did:walkie:receiver")
+            .to("did:chorus:receiver")
             .priority(Priority::URGENT)
             .requires_human()
             .reply_to(&original_id);
@@ -614,14 +614,14 @@ mod tests {
 
         // Verify JSON structure
         assert!(json_str.contains("task_assignment"));
-        assert!(json_str.contains("did:walkie:receiver"));
+        assert!(json_str.contains("did:chorus:receiver"));
         assert!(json_str.contains("review-pr"));
 
         // Deserialize
         let decoded = AgentMessage::from_json_bytes(&json_bytes).unwrap();
         assert_eq!(decoded.id, msg.id);
         assert_eq!(decoded.from_agent.agent_id, msg.from_agent.agent_id);
-        assert_eq!(decoded.to_agent, "did:walkie:receiver");
+        assert_eq!(decoded.to_agent, "did:chorus:receiver");
         assert_eq!(decoded.protocol, MessageProtocol::TaskAssignment);
         assert_eq!(decoded.payload["task"], "review-pr");
         assert_eq!(decoded.priority, Priority::URGENT);
@@ -680,9 +680,9 @@ mod tests {
     fn test_summary() {
         let agent = make_test_agent("Alice");
         let direct = AgentMessage::task(&agent, "review", serde_json::json!({}))
-            .to("did:walkie:bob");
+            .to("did:chorus:bob");
         assert!(direct.summary().contains("Alice"));
-        assert!(direct.summary().contains("did:walkie:bob"));
+        assert!(direct.summary().contains("did:chorus:bob"));
         assert!(direct.summary().contains("TASK"));
 
         let broadcast = AgentMessage::text(&agent, "hi");
@@ -744,7 +744,7 @@ mod tests {
     #[test]
     fn test_truncated_json_fails() {
         // Valid-looking start but cut off halfway
-        let partial = br#"{"id":"x","from_agent":{"agent_id":"did:walkie:"#;
+        let partial = br#"{"id":"x","from_agent":{"agent_id":"did:chorus:"#;
         assert!(AgentMessage::from_json_bytes(partial).is_err());
     }
 

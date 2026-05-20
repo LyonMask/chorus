@@ -516,15 +516,15 @@ impl TuiApp {
     // ── Demo Data ──
 
     pub fn load_demo_data(&mut self) {
-        self.add_agent("alice", "Alice", "did:walkie:maMVNJDswURGw");
+        self.add_agent("alice", "Alice", "did:chorus:maMVNJDswURGw");
         if let Some(a) = self.agents.get_mut("alice") {
             a.capabilities = vec!["coordinate".into(), "strategy".into()];
         }
-        self.add_agent("rustacean", "Rustacean", "did:walkie:fLYf2Xc0I3qyO");
+        self.add_agent("rustacean", "Rustacean", "did:chorus:fLYf2Xc0I3qyO");
         if let Some(a) = self.agents.get_mut("rustacean") {
             a.capabilities = vec!["code-review".into(), "crypto".into(), "p2p".into()];
         }
-        self.add_agent("bridge", "Bridge", "did:walkie:fmYIb9jntMvbj");
+        self.add_agent("bridge", "Bridge", "did:chorus:fmYIb9jntMvbj");
         if let Some(a) = self.agents.get_mut("bridge") {
             a.capabilities = vec!["product".into(), "review".into(), "human-handoff".into()];
         }
@@ -766,7 +766,7 @@ mod tests {
     #[test]
     fn test_app_add_agent() {
         let mut app = TuiApp::new();
-        app.add_agent("p1", "Alice", "did:walkie:abc123");
+        app.add_agent("p1", "Alice", "did:chorus:abc123");
         assert_eq!(app.online_agent_count(), 1);
         assert_eq!(app.agents["p1"].display_name, "Alice");
         assert!(app.agents["p1"].online);
@@ -775,7 +775,7 @@ mod tests {
     #[test]
     fn test_app_set_agent_offline() {
         let mut app = TuiApp::new();
-        app.add_agent("p1", "Alice", "did:walkie:abc123");
+        app.add_agent("p1", "Alice", "did:chorus:abc123");
         app.set_agent_offline("p1");
         assert_eq!(app.online_agent_count(), 0);
         assert!(!app.agents["p1"].online);
@@ -960,7 +960,7 @@ mod tests {
     #[test]
     fn test_app_status_line() {
         let mut app = TuiApp::new();
-        app.add_agent("p1", "Alice", "did:walkie:abc");
+        app.add_agent("p1", "Alice", "did:chorus:abc");
         let line = app.status_line();
         assert!(line.contains("Agents: 1 online"));
         assert!(line.contains("Tasks: 0/0"));
@@ -993,8 +993,8 @@ mod tests {
 
     #[test]
     fn test_agent_info_short_did() {
-        let info = AgentInfo::new("p1", "Alice", "did:walkie:abcdefghijklmnopqrstuvwx");
-        assert_eq!(info.short_did(), "did:walkie:abcdefghijklm");
+        let info = AgentInfo::new("p1", "Alice", "did:chorus:abcdefghijklmnopqrstuvwx");
+        assert_eq!(info.short_did(), "did:chorus:abcdefghijklm");
     }
 
     #[test]
