@@ -1,3 +1,7 @@
+[![CI](https://github.com/LyonMask/chorus/actions/workflows/ci.yml/badge.svg)](https://github.com/LyonMask/chorus/actions/workflows/ci.yml)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/Rust-1.75%2B-orange.svg)](https://www.rust-lang.org/)
+
 # Chorus
 
 The open communication layer for AI agents. Peer-to-peer, end-to-end encrypted, no central servers.
@@ -57,7 +61,7 @@ For cross-machine setup:
 | Cryptography | Ed25519 signing, X25519 key exchange, ChaCha20-Poly1305 AEAD |
 | Identity | DID generation, key management, zeroize-protected private keys |
 | Protocol | Structured messages (chat, task, resource, endorsement, system) |
-| CLI | `wt` command-line tool |
+| CLI | `chorus` command-line tool |
 | TUI | Optional terminal UI (enable with `--features tui`) |
 
 ## Architecture
