@@ -12,7 +12,7 @@ use crate::crypto::{CryptoLayer, KeyPair};
 use crate::identity::AgentIdentity;
 use crate::protocol::AgentMessage;
 
-use super::behaviour::WalkieBehaviour;
+use super::behaviour::ChorusBehaviour;
 use super::direct::{self, DirectPayload, DirectRequest, DirectResponse, DirectResponseStatus};
 use super::envelope::{CryptoEnvelope, WT_TOPIC};
 use super::event::P2PEvent;
@@ -124,7 +124,7 @@ fn verify_identity_claim(identity_json: &[u8]) -> Result<AgentIdentity, String> 
 
 /// Send a KeyOffer to a peer via the Direct channel.
 pub(crate) fn send_key_offer(
-    swarm: &mut Swarm<WalkieBehaviour>,
+    swarm: &mut Swarm<ChorusBehaviour>,
     my_keys: &KeyPair,
     peer_id: &PeerId,
 ) {
@@ -135,7 +135,7 @@ pub(crate) fn send_key_offer(
 
 /// Send a KeyAccept to a peer via Direct channel.
 pub(crate) fn send_key_accept(
-    swarm: &mut Swarm<WalkieBehaviour>,
+    swarm: &mut Swarm<ChorusBehaviour>,
     my_keys: &KeyPair,
     peer_id: &PeerId,
 ) {
@@ -161,7 +161,7 @@ pub(crate) fn handle_direct_request(
     request: DirectRequest,
     crypto: &mut CryptoLayer,
     my_keys: &KeyPair,
-    swarm: &mut Swarm<WalkieBehaviour>,
+    swarm: &mut Swarm<ChorusBehaviour>,
     event_tx: &mpsc::UnboundedSender<P2PEvent>,
     agent_identity: &Option<AgentIdentity>,
     identity_registry: &mut Option<crate::identity::IdentityRegistry>,
@@ -268,7 +268,7 @@ pub(crate) fn handle_crypto_envelope(
     envelope: CryptoEnvelope,
     crypto: &mut CryptoLayer,
     my_keys: &KeyPair,
-    swarm: &mut Swarm<WalkieBehaviour>,
+    swarm: &mut Swarm<ChorusBehaviour>,
     event_tx: &mpsc::UnboundedSender<P2PEvent>,
     agent_identity: &Option<AgentIdentity>,
     identity_registry: &mut Option<crate::identity::IdentityRegistry>,

@@ -12,7 +12,7 @@ use futures::StreamExt;
 
 use crate::crypto::CryptoLayer;
 
-use super::behaviour::WalkieBehaviour;
+use super::behaviour::ChorusBehaviour;
 use super::config::{P2PCommand, P2PConfig};
 use super::direct::{self, PendingMessageStore};
 use super::envelope::{CryptoEnvelope, WT_TOPIC};
@@ -91,7 +91,7 @@ impl P2PNetwork {
 
                 let direct = direct::new_direct_behaviour();
 
-                Ok(WalkieBehaviour {
+                Ok(ChorusBehaviour {
                     gossipsub,
                     identify,
                     ping: ping_behaviour,
@@ -238,7 +238,7 @@ impl P2PNetwork {
 
                             // ── Relay events ──
                             libp2p::swarm::SwarmEvent::Behaviour(
-                                super::WalkieBehaviourEvent::Relay(event),
+                                super::ChorusBehaviourEvent::Relay(event),
                             ) => {
                                 match event {
                                     relay::client::Event::ReservationReqAccepted { relay_peer_id, .. } => {
@@ -258,7 +258,7 @@ impl P2PNetwork {
 
                             // ── DCUtR (hole punching) events ──
                             libp2p::swarm::SwarmEvent::Behaviour(
-                                super::WalkieBehaviourEvent::Dcutr(event),
+                                super::ChorusBehaviourEvent::Dcutr(event),
                             ) => {
                                 let remote = event.remote_peer_id;
                                 match &event.result {
@@ -276,7 +276,7 @@ impl P2PNetwork {
 
                             // ── Relay server events ──
                             libp2p::swarm::SwarmEvent::Behaviour(
-                                super::WalkieBehaviourEvent::RelaySrv(event),
+                                super::ChorusBehaviourEvent::RelaySrv(event),
                             ) => {
                                 match event {
                                     relay::Event::ReservationReqAccepted { src_peer_id, .. } => {
@@ -304,7 +304,7 @@ impl P2PNetwork {
                             }
                             // ── Gossipsub ──
                             libp2p::swarm::SwarmEvent::Behaviour(
-                                super::WalkieBehaviourEvent::Gossipsub(
+                                super::ChorusBehaviourEvent::Gossipsub(
                                     gossipsub::Event::Message {
                                         propagation_source, message, ..
                                     },
@@ -323,19 +323,19 @@ impl P2PNetwork {
                                 }
                             }
                             libp2p::swarm::SwarmEvent::Behaviour(
-                                super::WalkieBehaviourEvent::Gossipsub(
+                                super::ChorusBehaviourEvent::Gossipsub(
                                     gossipsub::Event::Subscribed { peer_id, topic },
                                 ),
                             ) => { tracing::debug!(target: "p2p", "{peer_id} subscribed {topic}"); }
                             libp2p::swarm::SwarmEvent::Behaviour(
-                                super::WalkieBehaviourEvent::Gossipsub(
+                                super::ChorusBehaviourEvent::Gossipsub(
                                     gossipsub::Event::Unsubscribed { peer_id, topic },
                                 ),
                             ) => { tracing::debug!(target: "p2p", "{peer_id} unsubscribed {topic}"); }
 
                             // ── Direct channel ──
                             libp2p::swarm::SwarmEvent::Behaviour(
-                                super::WalkieBehaviourEvent::Direct(
+                                super::ChorusBehaviourEvent::Direct(
                                     request_response::Event::Message {
                                         peer,
                                         message: request_response::Message::Request { request, channel, .. },
@@ -353,7 +353,7 @@ impl P2PNetwork {
                                 let _ = swarm.behaviour_mut().direct.send_response(channel, response);
                             }
                             libp2p::swarm::SwarmEvent::Behaviour(
-                                super::WalkieBehaviourEvent::Direct(
+                                super::ChorusBehaviourEvent::Direct(
                                     request_response::Event::Message {
                                         peer,
                                         message: request_response::Message::Response { request_id, response, .. },
@@ -365,7 +365,7 @@ impl P2PNetwork {
                                 let _ = event_tx.send(P2PEvent::DirectResponse { from: peer, response });
                             }
                             libp2p::swarm::SwarmEvent::Behaviour(
-                                super::WalkieBehaviourEvent::Direct(
+                                super::ChorusBehaviourEvent::Direct(
                                     request_response::Event::OutboundFailure { peer, request_id, error, .. },
                                 ),
                             ) => {
@@ -376,14 +376,14 @@ impl P2PNetwork {
                                 });
                             }
                             libp2p::swarm::SwarmEvent::Behaviour(
-                                super::WalkieBehaviourEvent::Direct(
+                                super::ChorusBehaviourEvent::Direct(
                                     request_response::Event::InboundFailure { peer, error, .. },
                                 ),
                             ) => {
                                 tracing::warn!(target: "p2p", "📥 direct inbound failure from {peer}: {error}");
                             }
                             libp2p::swarm::SwarmEvent::Behaviour(
-                                super::WalkieBehaviourEvent::Direct(
+                                super::ChorusBehaviourEvent::Direct(
                                     request_response::Event::ResponseSent { peer, .. },
                                 ),
                             ) => {
@@ -391,17 +391,17 @@ impl P2PNetwork {
                             }
 
                             libp2p::swarm::SwarmEvent::Behaviour(
-                                super::WalkieBehaviourEvent::Identify(identify::Event::Sent { .. })
+                                super::ChorusBehaviourEvent::Identify(identify::Event::Sent { .. })
                             ) => {}
                             // ── Ping ──
                             libp2p::swarm::SwarmEvent::Behaviour(
-                                super::WalkieBehaviourEvent::Ping(ping::Event { peer, result: Ok(rtt), .. }),
+                                super::ChorusBehaviourEvent::Ping(ping::Event { peer, result: Ok(rtt), .. }),
                             ) => {
                                 tracing::trace!(target: "p2p", "🏓 ping {peer}: {rtt:?}");
                                 let _ = event_tx.send(P2PEvent::PingSuccess { peer_id: peer, rtt });
                             }
                             libp2p::swarm::SwarmEvent::Behaviour(
-                                super::WalkieBehaviourEvent::Ping(ping::Event { peer, result: Err(error), .. }),
+                                super::ChorusBehaviourEvent::Ping(ping::Event { peer, result: Err(error), .. }),
                             ) => {
                                 let err_str = error.to_string();
                                 tracing::warn!(target: "p2p", "🏓 ping FAIL {peer}: {err_str}");
@@ -410,7 +410,7 @@ impl P2PNetwork {
 
                             // ── mDNS ──
                             libp2p::swarm::SwarmEvent::Behaviour(
-                                super::WalkieBehaviourEvent::Mdns(mdns::Event::Discovered(list)),
+                                super::ChorusBehaviourEvent::Mdns(mdns::Event::Discovered(list)),
                             ) => {
                                 for (pid, addr) in list {
                                     mdns_peer_addrs.entry(pid).or_default().push(addr.clone());
@@ -423,7 +423,7 @@ impl P2PNetwork {
                                 }
                             }
                             libp2p::swarm::SwarmEvent::Behaviour(
-                                super::WalkieBehaviourEvent::Mdns(mdns::Event::Expired(list)),
+                                super::ChorusBehaviourEvent::Mdns(mdns::Event::Expired(list)),
                             ) => {
                                 for (pid, _addr) in list {
                                     mdns_peer_addrs.remove(&pid);

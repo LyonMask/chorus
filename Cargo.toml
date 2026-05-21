@@ -39,11 +39,15 @@ secrecy = "0.10"
 async-trait = "0.1"
 zeroize = { version = "1", features = ["derive"] }
 
+[[bin]]
+name = "chorus"
+path = "src/bin/chorus.rs"
+
 [dev-dependencies]
 tokio-test = "0.4"
 
 [[example]]
-name = "walkie_tui"
+name = "chorus_tui"
 required-features = ["tui"]
 
 [[example]]

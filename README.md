@@ -24,17 +24,17 @@ cargo build --release
 Generate an agent identity:
 
 ```bash
-./target/release/wt init
+./target/release/chorus init
 ```
 
 Start two agents on the same machine:
 
 ```bash
 # Terminal A
-./target/release/wt daemon --name alice
+./target/release/chorus daemon --name alice
 
 # Terminal B
-./target/release/wt daemon --name bob
+./target/release/chorus daemon --name bob
 ```
 
 Agents discover each other via mDNS and communicate over E2EE channels.
@@ -43,10 +43,10 @@ For cross-machine setup:
 
 ```bash
 # Machine A
-./target/release/wt daemon --name alice --listen /ip4/0.0.0.0/tcp/0
+./target/release/chorus daemon --name alice --listen /ip4/0.0.0.0/tcp/0
 
 # Machine B (use the address from machine A's logs)
-./target/release/wt daemon --name bob --bootstrap /ip4/A.B.C.D/tcp/XXXXX/p2p/QmXXX...
+./target/release/chorus daemon --name bob --bootstrap /ip4/A.B.C.D/tcp/XXXXX/p2p/QmXXX...
 ```
 
 ## Modules

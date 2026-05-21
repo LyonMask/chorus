@@ -16,7 +16,7 @@ pub mod network;
 
 // ─── Public re-exports ───────────────────────────────────────────
 
-pub use behaviour::WalkieBehaviour;
+pub use behaviour::ChorusBehaviour;
 pub use config::P2PConfig;
 pub use direct::{
     DirectCodec, DirectPayload, DirectRequest, DirectResponse, DirectResponseStatus,
@@ -27,4 +27,4 @@ pub use event::{Message, P2PEvent};
 pub use network::P2PNetwork;
 
 // Re-export the auto-generated behaviour event enum (for network.rs internals).
-pub(crate) use behaviour::WalkieBehaviourEvent;
+pub(crate) use behaviour::ChorusBehaviourEvent;

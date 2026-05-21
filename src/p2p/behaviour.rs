@@ -8,7 +8,7 @@ use super::direct::DirectCodec;
 
 /// libp2p behaviour combining Gossipsub, Identify, Ping, mDNS, Relay (client + server), DCUtR, and Direct channel.
 #[derive(NetworkBehaviour)]
-pub struct WalkieBehaviour {
+pub struct ChorusBehaviour {
     pub gossipsub: gossipsub::Behaviour,
     pub identify: identify::Behaviour,
     pub ping: ping::Behaviour,

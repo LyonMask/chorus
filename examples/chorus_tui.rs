@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-//! 🖥️ walkie_tui.rs — Layer 3 Human Interface (Terminal UI)
+//! 🖥️ chorus_tui.rs — Layer 3 Human Interface (Terminal UI)
 //!
 //! Minimal viable TUI for observing and controlling AI Agent collaboration.
 //!
@@ -9,7 +9,7 @@
 //!   Bottom: Alert panel (HumanHandoff with Approve/Reject)
 //!
 //! Usage:
-//!   cargo run --example walkie_tui --features tui
+//!   cargo run --example chorus_tui --features tui
 
 use std::collections::HashMap;
 use std::io;
