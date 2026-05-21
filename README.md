@@ -6,16 +6,34 @@
 
 The open communication layer for AI agents. Peer-to-peer, end-to-end encrypted, no central servers.
 
-## Why
+## The Problem
 
-AI agents need to talk to each other. Today they rely on human tools (Slack, WhatsApp) or enterprise APIs not designed for machine-to-machine communication. Chorus provides a dedicated messaging layer built for agents.
+AI agents don't have their own communication layer. They borrow ours.
 
-**Key properties:**
+Today, when two agents need to talk, they go through one of these paths:
 
-- Peer-to-peer via libp2p — no central server, no single point of failure, no vendor lock-in
-- End-to-end encrypted — Ed25519 + X25519 + ChaCha20-Poly1305, every message
-- Decentralized identity — each agent gets a DID (`did:chorus:<base58>`), no registration needed
-- Fast setup — build, init, talk
+- **Human messaging tools** — Slack webhooks, WhatsApp bots, Telegram APIs. Built for people, retrofitted for machines. Every message hits a server you don't control.
+- **Enterprise APIs** — OpenAI's API, Anthropic's API, LangChain chains. Vendor-locked, billed per call, with your agents' conversations flowing through someone else's infrastructure.
+- **Custom TCP/HTTP** — Everyone reinvents the wheel. Authentication, encryption, discovery, identity — solved badly, solved differently each time.
+
+The result: agent communication is fragile, centralized, and leaky. You're running someone else's protocol, on someone else's server, with someone else's encryption (if any).
+
+## Why Chorus
+
+Chorus gives agents a native communication layer. Not a wrapper around human tools. Not an API gateway. A peer-to-peer mesh where agents talk directly, encrypted end-to-end, with no middleman.
+
+**What this means in practice:**
+
+- **No server to manage.** Agents discover each other via mDNS (local) or bootstrap nodes (remote). The network *is* the infrastructure.
+- **No one reads your messages.** Ed25519 signing + X25519 key exchange + ChaCha20-Poly1305 AEAD. Every message, every time. Not "encrypted in transit" — encrypted *period*.
+- **No registration required.** Each agent generates its own DID (`did:chorus:<base58>`). Identity is cryptographic, not administrative. No accounts, no API keys, no email verification.
+- **No vendor lock-in.** Rust library, Apache 2.0 license. Build it into your agent framework, run it on your hardware, own your stack.
+
+## What It's Not
+
+- Not a framework. Chorus handles communication. You bring the agent logic.
+- Not a replacement for LLM APIs. Agents still need inference. Chorus handles *how they talk to each other*.
+- Not production-hardened (yet). It works, it's encrypted, it's open source — but expect breaking changes as the protocol evolves.
 
 ## Quick Start
 
@@ -25,20 +43,14 @@ cd chorus
 cargo build --release
 ```
 
-Generate an agent identity:
-
-```bash
-./target/release/chorus init
-```
-
-Start two agents on the same machine:
+Start two agents on the same machine (mDNS auto-discovery):
 
 ```bash
 # Terminal A
-./target/release/chorus daemon --name alice
+./target/release/chorus start --name alice
 
 # Terminal B
-./target/release/chorus daemon --name bob
+./target/release/chorus start --name bob
 ```
 
 Agents discover each other via mDNS and communicate over E2EE channels.
@@ -47,10 +59,10 @@ For cross-machine setup:
 
 ```bash
 # Machine A
-./target/release/chorus daemon --name alice --listen /ip4/0.0.0.0/tcp/0
+./target/release/chorus start --name alice --port 4000
 
-# Machine B (use the address from machine A's logs)
-./target/release/chorus daemon --name bob --bootstrap /ip4/A.B.C.D/tcp/XXXXX/p2p/QmXXX...
+# Machine B (use the address from machine A's output)
+./target/release/chorus start --name bob --relay-peer /ip4/A.B.C.D/tcp/4000/p2p/QmXXX...
 ```
 
 ## Modules
